@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
@@ -9,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useStore } from '../../context/StoreContext';
 import { PAYMENT_METHODS, PaymentMethod, Sale } from '../../types/models';
@@ -19,9 +21,14 @@ import {
   ChipSelector,
   EmptyState,
   FormField,
+  HeaderActionPill,
   PrimaryButton,
+  ProgressBar,
   ScreenHeader,
+  SearchField,
+  SegmentedTabs,
   confirmAction,
+  useToast,
 } from '../../components/UI';
 import {
   formatCurrency,
@@ -34,6 +41,8 @@ import { copyTextToClipboard } from '../../utils/exporter';
 type SaleFilter = 'Todas' | 'Por Cobrar' | 'Pagadas';
 
 export default function PagosVentasScreen() {
+  const params = useLocalSearchParams<{ open?: string }>();
+  const { showToast } = useToast();
   const {
     settings,
     products,
@@ -49,6 +58,7 @@ export default function PagosVentasScreen() {
 
   // Modal Nueva Venta / Apartado
   const [newSaleOpen, setNewSaleOpen] = useState(false);
+  const [dismissedOpenParam, setDismissedOpenParam] = useState<string | undefined>(undefined);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [parishOrGroup, setParishOrGroup] = useState('');
@@ -62,12 +72,25 @@ export default function PagosVentasScreen() {
   const [dueDays, setDueDays] = useState('15');
   const [saleNotes, setSaleNotes] = useState('');
 
-  // Modal Registrar Abono / Ver Historial
+  // Modal Registrar Abono / Detalle
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const [abonoAmount, setAbonoAmount] = useState('');
   const [abonoMethod, setAbonoMethod] = useState<PaymentMethod>('Efectivo');
   const [abonoRef, setAbonoRef] = useState('');
   const [abonoNotes, setAbonoNotes] = useState('');
+
+  const isNewSaleVisible =
+    newSaleOpen || Boolean(params.open && params.open !== dismissedOpenParam);
+
+  const closeNewSaleModal = () => {
+    setNewSaleOpen(false);
+    if (params.open) setDismissedOpenParam(params.open);
+  };
+
+  const pendingCount = useMemo(
+    () => sales.filter((s) => s.status !== 'paid').length,
+    [sales]
+  );
 
   const filteredSales = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -93,7 +116,7 @@ export default function PagosVentasScreen() {
     [sales]
   );
 
-  // Cálculos del carrito
+  // Carrito
   const cartSubtotal = useMemo(() => {
     let sum = 0;
     for (const prod of products) {
@@ -102,6 +125,11 @@ export default function PagosVentasScreen() {
     }
     return Number(sum.toFixed(2));
   }, [cart, products]);
+
+  const cartItemCount = useMemo(
+    () => Object.values(cart).reduce((a, b) => a + b, 0),
+    [cart]
+  );
 
   const cartDiscount = Math.min(cartSubtotal, Math.max(0, parseNumericInput(discountInput)));
   const cartTotal = Number(Math.max(0, cartSubtotal - cartDiscount).toFixed(2));
@@ -150,14 +178,14 @@ export default function PagosVentasScreen() {
       .map(([productId, quantity]) => ({ productId, quantity }));
 
     if (cartEntries.length === 0) {
-      Alert.alert('Carrito vacío', 'Selecciona al menos una Biblia, camándula o producto.');
+      Alert.alert('Carrito vacío', 'Selecciona al menos una Biblia, camándula o artículo.');
       return;
     }
 
     if (paymentMode === 'installment' && !customerName.trim()) {
       Alert.alert(
-        'Nombre del cliente requerido',
-        'Para ventas por abonos o crédito debes indicar el nombre del comprador.'
+        'Cliente requerido',
+        'Para ventas por abonos o apartado indica el nombre del comprador.'
       );
       return;
     }
@@ -173,7 +201,7 @@ export default function PagosVentasScreen() {
         ? new Date(Date.now() + days * 86400000).toISOString()
         : '';
 
-    await createSale({
+    const created = await createSale({
       customerName,
       customerPhone,
       parishOrGroup,
@@ -186,7 +214,9 @@ export default function PagosVentasScreen() {
       cart: cartEntries,
     });
 
-    setNewSaleOpen(false);
+    closeNewSaleModal();
+    setCart({});
+    showToast(`Venta ${created.folio} registrada (${formatCurrency(created.total, sym)})`);
   };
 
   const handleRegisterAbono = async () => {
@@ -203,37 +233,48 @@ export default function PagosVentasScreen() {
       reference: abonoRef,
       notes: abonoNotes,
     });
-    setSelectedSale(null);
+    showToast(`Abono de ${formatCurrency(amount, sym)} registrado con éxito`);
     setAbonoAmount('');
     setAbonoRef('');
     setAbonoNotes('');
   };
 
-  const handleCopyReceipt = async (sale: Sale) => {
-    const lines = [
-      `✝️ ${settings.storeName} — Comprobante ${sale.folio}`,
+  const buildReceiptText = (sale: Sale) => {
+    return [
+      `✝️ *${settings.storeName}* — Comprobante ${sale.folio}`,
       `Cliente: ${sale.customerName}`,
-      sale.parishOrGroup ? `Comunidad/Parroquia: ${sale.parishOrGroup}` : '',
+      sale.parishOrGroup ? `Comunidad: ${sale.parishOrGroup}` : '',
       `Fecha: ${formatDateTime(sale.createdAt)}`,
       `────────────────────────`,
       ...sale.items.map(
         (i) => `• ${i.quantity}x ${i.productName} (${formatCurrency(i.subtotal, sym)})`
       ),
       sale.discount > 0 ? `Descuento: -${formatCurrency(sale.discount, sym)}` : '',
-      `TOTAL: ${formatCurrency(sale.total, sym)}`,
-      `PAGADO: ${formatCurrency(sale.paidAmount, sym)}`,
-      `SALDO PENDIENTE: ${formatCurrency(sale.balance, sym)}`,
-      `¡Dios le bendiga!`,
-    ].filter(Boolean);
-
-    await copyTextToClipboard(lines.join('\n'));
-    Alert.alert(
-      'Comprobante copiado',
-      'El estado de cuenta se copió al portapapeles listo para pegar en WhatsApp o SMS.'
-    );
+      `*TOTAL:* ${formatCurrency(sale.total, sym)}`,
+      `*PAGADO:* ${formatCurrency(sale.paidAmount, sym)}`,
+      sale.balance > 0
+        ? `*SALDO PENDIENTE:* ${formatCurrency(sale.balance, sym)}`
+        : `✅ *ESTADO: PAGADO TOTALMENTE*`,
+      `¡Gracias por su compra, Dios le bendiga!`,
+    ]
+      .filter(Boolean)
+      .join('\n');
   };
 
-  // Mantener sincronizada la venta abierta en el modal con el store actualizado
+  const handleCopyReceipt = async (sale: Sale) => {
+    await copyTextToClipboard(buildReceiptText(sale));
+    showToast('Comprobante copiado al portapapeles');
+  };
+
+  const handleSendWhatsApp = (sale: Sale) => {
+    const digits = sale.customerPhone.replace(/[^0-9]/g, '');
+    const msg = encodeURIComponent(buildReceiptText(sale));
+    const url = digits ? `https://wa.me/${digits}?text=${msg}` : `https://wa.me/?text=${msg}`;
+    Linking.openURL(url).catch(() => {
+      handleCopyReceipt(sale);
+    });
+  };
+
   const activeSaleDetail = useMemo(
     () => (selectedSale ? sales.find((s) => s.id === selectedSale.id) ?? null : null),
     [sales, selectedSale]
@@ -243,30 +284,28 @@ export default function PagosVentasScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScreenHeader
         title="Pagos y Ventas"
-        subtitle={`Cobrado: ${formatCurrency(totalCollected, sym)} · Por cobrar: ${formatCurrency(totalReceivable, sym)}`}
+        subtitle={`Caja: ${formatCurrency(totalCollected, sym)} · Pendiente: ${formatCurrency(totalReceivable, sym)}`}
         rightAction={
-          <Pressable onPress={openNewSaleModal} style={styles.newSaleBtn}>
-            <Ionicons name="add-circle" size={18} color={COLORS.primary} />
-            <Text style={styles.newSaleBtnText}>Nueva Venta</Text>
-          </Pressable>
+          <HeaderActionPill
+            label="Nueva Venta"
+            icon="add"
+            variant="gold"
+            onPress={openNewSaleModal}
+          />
         }
       />
 
       <View style={styles.topControls}>
-        <View style={styles.searchBox}>
-          <Ionicons name="search-outline" size={18} color={COLORS.textMuted} />
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Buscar cliente, folio GS-0001, parroquia o producto..."
-            placeholderTextColor={COLORS.textMuted}
-            style={styles.searchInput}
-          />
-        </View>
-        <ChipSelector
+        <SegmentedTabs
           options={['Todas', 'Por Cobrar', 'Pagadas'] as const}
           selected={filter}
           onSelect={setFilter}
+          badges={{ 'Por Cobrar': pendingCount }}
+        />
+        <SearchField
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Buscar cliente, folio GS-0001 o parroquia..."
         />
       </View>
 
@@ -276,20 +315,21 @@ export default function PagosVentasScreen() {
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <EmptyState
-            icon="receipt-outline"
-            title="Sin ventas en esta vista"
+            icon="wallet-outline"
+            title="Sin ventas en esta sección"
             description="Registra ventas al contado o apartados por abonos de Biblias, camándulas y artículos religiosos."
             actionLabel="Registrar Venta"
             onAction={openNewSaleModal}
           />
         }
         renderItem={({ item }) => {
+          const pct = item.total > 0 ? item.paidAmount / item.total : 1;
           const statusBadge =
             item.status === 'paid'
-              ? { text: 'PAGADO', tone: 'success' as const }
+              ? { text: 'LIQUIDADO', tone: 'success' as const }
               : item.status === 'partial'
-                ? { text: `ABONADO · DEBE ${formatCurrency(item.balance, sym)}`, tone: 'warning' as const }
-                : { text: `PENDIENTE · ${formatCurrency(item.balance, sym)}`, tone: 'danger' as const };
+                ? { text: `DEBE ${formatCurrency(item.balance, sym)}`, tone: 'warning' as const }
+                : { text: `CRÉDITO ${formatCurrency(item.balance, sym)}`, tone: 'danger' as const };
 
           return (
             <Pressable
@@ -316,31 +356,46 @@ export default function PagosVentasScreen() {
                 {item.items.map((i) => `${i.quantity}x ${i.productName}`).join(' · ')}
               </Text>
 
-              <View style={styles.saleFooter}>
-                <View>
-                  <Text style={styles.totalText}>
-                    Total: {formatCurrency(item.total, sym)}
-                  </Text>
-                  <Text style={styles.paidSubText}>
-                    Pagado: {formatCurrency(item.paidAmount, sym)} ({item.payments.length}{' '}
-                    {item.payments.length === 1 ? 'pago' : 'pagos'})
-                    {item.dueDate && item.balance > 0 ? ` · Vence ${formatDate(item.dueDate)}` : ''}
-                  </Text>
-                </View>
+              {/* Barra visual de avance de pago */}
+              <View style={{ gap: 4 }}>
+                <ProgressBar
+                  progress={pct}
+                  tone={item.status === 'paid' ? 'success' : 'accent'}
+                  height={6}
+                />
+                <View style={styles.saleFooter}>
+                  <View>
+                    <Text style={styles.totalText}>
+                      Total: {formatCurrency(item.total, sym)}
+                    </Text>
+                    <Text style={styles.paidSubText}>
+                      Abonado: {formatCurrency(item.paidAmount, sym)} ({Math.round(pct * 100)}%)
+                      {item.dueDate && item.balance > 0
+                        ? ` · Vence ${formatDate(item.dueDate)}`
+                        : ''}
+                    </Text>
+                  </View>
 
-                <View style={styles.cardActionRow}>
-                  {item.balance > 0 ? (
-                    <View style={styles.payNowPill}>
-                      <Ionicons name="cash-outline" size={14} color="#FFFFFF" />
-                      <Text style={styles.payNowText}>Abonar</Text>
-                    </View>
-                  ) : null}
-                  <Pressable
-                    onPress={() => handleCopyReceipt(item)}
-                    style={styles.copyIconBtn}
-                  >
-                    <Ionicons name="copy-outline" size={16} color={COLORS.primary} />
-                  </Pressable>
+                  <View style={styles.cardActionRow}>
+                    {item.balance > 0 ? (
+                      <View style={styles.payNowPill}>
+                        <Ionicons name="add-circle-outline" size={14} color={COLORS.primaryDark} />
+                        <Text style={styles.payNowText}>Abonar</Text>
+                      </View>
+                    ) : null}
+                    <Pressable
+                      onPress={() => handleSendWhatsApp(item)}
+                      style={[styles.iconCircleBtn, { backgroundColor: COLORS.successLight }]}
+                    >
+                      <Ionicons name="logo-whatsapp" size={15} color={COLORS.success} />
+                    </Pressable>
+                    <Pressable
+                      onPress={() => handleCopyReceipt(item)}
+                      style={[styles.iconCircleBtn, { backgroundColor: COLORS.primaryLight }]}
+                    >
+                      <Ionicons name="copy-outline" size={15} color={COLORS.primary} />
+                    </Pressable>
+                  </View>
                 </View>
               </View>
             </Pressable>
@@ -348,17 +403,22 @@ export default function PagosVentasScreen() {
         }}
       />
 
-      {/* Modal Nueva Venta */}
+      {/* Modal Nueva Venta / POS */}
       <BottomSheetModal
-        visible={newSaleOpen}
-        title="Registrar Venta o Apartado"
-        onClose={() => setNewSaleOpen(false)}
+        visible={isNewSaleVisible}
+        title="Nueva Venta o Apartado"
+        subtitle={
+          cartItemCount > 0
+            ? `${cartItemCount} uds. en carrito · Total ${formatCurrency(cartTotal, sym)}`
+            : 'Selecciona los artículos del inventario'
+        }
+        onClose={closeNewSaleModal}
       >
-        <Text style={styles.sectionSubtitle}>1. Selecciona productos del stock</Text>
+        <Text style={styles.sectionSubtitle}>1. Catálogo disponible</Text>
         <TextInput
           value={productQuery}
           onChangeText={setProductQuery}
-          placeholder="Filtrar Biblias, camándulas..."
+          placeholder="Filtrar Biblias, camándulas, medallas..."
           placeholderTextColor={COLORS.textMuted}
           style={styles.inlineSearch}
         />
@@ -368,13 +428,16 @@ export default function PagosVentasScreen() {
             const qty = cart[prod.id] ?? 0;
             const disabled = prod.stock <= 0;
             return (
-              <View key={prod.id} style={styles.pickerRow}>
+              <View
+                key={prod.id}
+                style={[styles.pickerRow, qty > 0 && styles.pickerRowSelected]}
+              >
                 <View style={{ flex: 1 }}>
                   <Text style={styles.pickerName} numberOfLines={1}>
                     {prod.name}
                   </Text>
                   <Text style={styles.pickerMeta}>
-                    {formatCurrency(prod.salePrice, sym)} · Disp: {prod.stock}
+                    {formatCurrency(prod.salePrice, sym)} · Stock: {prod.stock}
                   </Text>
                 </View>
                 <View style={styles.qtyStepper}>
@@ -402,8 +465,17 @@ export default function PagosVentasScreen() {
         </View>
 
         <View style={styles.cartSummaryBar}>
-          <Text style={styles.cartSummaryLabel}>Subtotal: {formatCurrency(cartSubtotal, sym)}</Text>
-          <Text style={styles.cartSummaryTotal}>Total: {formatCurrency(cartTotal, sym)}</Text>
+          <View>
+            <Text style={styles.cartSummaryLabel}>
+              Subtotal ({cartItemCount} uds.): {formatCurrency(cartSubtotal, sym)}
+            </Text>
+            {cartDiscount > 0 ? (
+              <Text style={styles.discountNote}>
+                Descuento aplicado: -{formatCurrency(cartDiscount, sym)}
+              </Text>
+            ) : null}
+          </View>
+          <Text style={styles.cartSummaryTotal}>{formatCurrency(cartTotal, sym)}</Text>
         </View>
 
         <FormField
@@ -413,7 +485,7 @@ export default function PagosVentasScreen() {
           onChangeText={setDiscountInput}
         />
 
-        <Text style={styles.sectionSubtitle}>2. Datos del comprador / comunidad</Text>
+        <Text style={styles.sectionSubtitle}>2. Comprador / Comunidad</Text>
         <FormField
           label="Nombre del cliente"
           placeholder="Ej. Hna. Lucía / Juan Pérez / Mostrador"
@@ -433,26 +505,26 @@ export default function PagosVentasScreen() {
           <View style={{ flex: 1 }}>
             <FormField
               label="Parroquia / Grupo"
-              placeholder="Ej. Legión de María"
+              placeholder="Ej. Catequesis"
               value={parishOrGroup}
               onChangeText={setParishOrGroup}
             />
           </View>
         </View>
 
-        <Text style={styles.sectionSubtitle}>3. Modalidad de Pago</Text>
+        <Text style={styles.sectionSubtitle}>3. Modalidad de Cobro</Text>
         <View style={styles.row2}>
           <View style={{ flex: 1 }}>
             <PrimaryButton
               label="Contado (100%)"
               icon="checkmark-circle-outline"
-              variant={paymentMode === 'full' ? 'success' : 'outline'}
+              variant={paymentMode === 'full' ? 'primary' : 'outline'}
               onPress={() => setPaymentMode('full')}
             />
           </View>
           <View style={{ flex: 1 }}>
             <PrimaryButton
-              label="Abono / Crédito"
+              label="Por Abonos"
               icon="calendar-outline"
               variant={paymentMode === 'installment' ? 'accent' : 'outline'}
               onPress={() => setPaymentMode('installment')}
@@ -462,24 +534,40 @@ export default function PagosVentasScreen() {
 
         <View style={{ height: 12 }} />
         {paymentMode === 'installment' ? (
-          <View style={styles.row2}>
-            <View style={{ flex: 1 }}>
-              <FormField
-                label={`Abono Inicial (${sym})`}
-                placeholder="0.00"
-                keyboardType="decimal-pad"
-                value={initialPaymentInput}
-                onChangeText={setInitialPaymentInput}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <FormField
-                label="Plazo (días)"
-                placeholder="15"
-                keyboardType="number-pad"
-                value={dueDays}
-                onChangeText={setDueDays}
-              />
+          <View>
+            {cartTotal > 0 ? (
+              <View style={styles.presetRow}>
+                <Text style={styles.presetHint}>Abono rápido:</Text>
+                {[0.25, 0.5, 0.75].map((ratio) => (
+                  <Pressable
+                    key={ratio}
+                    onPress={() => setInitialPaymentInput((cartTotal * ratio).toFixed(2))}
+                    style={styles.presetChip}
+                  >
+                    <Text style={styles.presetChipText}>{Math.round(ratio * 100)}%</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+            <View style={styles.row2}>
+              <View style={{ flex: 1 }}>
+                <FormField
+                  label={`Abono Inicial (${sym})`}
+                  placeholder="0.00"
+                  keyboardType="decimal-pad"
+                  value={initialPaymentInput}
+                  onChangeText={setInitialPaymentInput}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <FormField
+                  label="Plazo (días)"
+                  placeholder="15"
+                  keyboardType="number-pad"
+                  value={dueDays}
+                  onChangeText={setDueDays}
+                />
+              </View>
             </View>
           </View>
         ) : null}
@@ -493,14 +581,14 @@ export default function PagosVentasScreen() {
 
         <View style={{ height: 10 }} />
         <FormField
-          label="Referencia de pago (opcional)"
-          placeholder="Nº transferencia, recibo o comprobante"
+          label="Referencia (opcional)"
+          placeholder="Nº transferencia o comprobante"
           value={paymentRef}
           onChangeText={setPaymentRef}
         />
         <FormField
-          label="Notas de la venta"
-          placeholder="Ej. Apartado para Confirmación..."
+          label="Notas"
+          placeholder="Observaciones del apartado o entrega..."
           value={saleNotes}
           onChangeText={setSaleNotes}
         />
@@ -512,14 +600,11 @@ export default function PagosVentasScreen() {
         />
       </BottomSheetModal>
 
-      {/* Modal Detalle de Venta y Registro de Abonos */}
+      {/* Modal Detalle y Abonos */}
       <BottomSheetModal
         visible={Boolean(activeSaleDetail)}
-        title={
-          activeSaleDetail
-            ? `${activeSaleDetail.folio} · ${activeSaleDetail.customerName}`
-            : 'Detalle de Venta'
-        }
+        title={activeSaleDetail ? `${activeSaleDetail.folio} · ${activeSaleDetail.customerName}` : ''}
+        subtitle={activeSaleDetail?.parishOrGroup || 'Estado de cuenta e historial de pagos'}
         onClose={() => setSelectedSale(null)}
       >
         {activeSaleDetail ? (
@@ -532,7 +617,7 @@ export default function PagosVentasScreen() {
                 </Text>
               </View>
               <View style={styles.detailRow}>
-                <Text style={styles.detailMuted}>Total Pagado:</Text>
+                <Text style={styles.detailMuted}>Total Abonado:</Text>
                 <Text style={[styles.detailBold, { color: COLORS.success }]}>
                   {formatCurrency(activeSaleDetail.paidAmount, sym)}
                 </Text>
@@ -551,9 +636,18 @@ export default function PagosVentasScreen() {
                   {formatCurrency(activeSaleDetail.balance, sym)}
                 </Text>
               </View>
+              <ProgressBar
+                progress={
+                  activeSaleDetail.total > 0
+                    ? activeSaleDetail.paidAmount / activeSaleDetail.total
+                    : 1
+                }
+                tone={activeSaleDetail.balance === 0 ? 'success' : 'accent'}
+                height={7}
+              />
             </View>
 
-            <Text style={styles.sectionSubtitle}>Artículos incluidos</Text>
+            <Text style={styles.sectionSubtitle}>Artículos</Text>
             {activeSaleDetail.items.map((it) => (
               <View key={it.id} style={styles.itemLine}>
                 <Text style={styles.itemLineText}>
@@ -566,11 +660,11 @@ export default function PagosVentasScreen() {
             ))}
 
             <Text style={styles.sectionSubtitle}>
-              Historial de Pagos ({activeSaleDetail.payments.length})
+              Pagos Registrados ({activeSaleDetail.payments.length})
             </Text>
             {activeSaleDetail.payments.length === 0 ? (
               <Text style={{ fontSize: 12.5, color: COLORS.textMuted }}>
-                Sin pagos registrados todavía (venta a crédito).
+                Venta entregada a crédito sin abono inicial.
               </Text>
             ) : (
               activeSaleDetail.payments.map((pay) => (
@@ -592,7 +686,26 @@ export default function PagosVentasScreen() {
 
             {activeSaleDetail.balance > 0 ? (
               <View style={styles.abonoBox}>
-                <Text style={styles.sectionSubtitle}>Registrar Nuevo Abono</Text>
+                <View style={styles.presetRow}>
+                  <Text style={styles.sectionSubtitle}>Registrar Abono</Text>
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <Pressable
+                      onPress={() =>
+                        setAbonoAmount((activeSaleDetail.balance * 0.5).toFixed(2))
+                      }
+                      style={styles.presetChip}
+                    >
+                      <Text style={styles.presetChipText}>50%</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setAbonoAmount(activeSaleDetail.balance.toFixed(2))}
+                      style={styles.presetChip}
+                    >
+                      <Text style={styles.presetChipText}>Liquidar 100%</Text>
+                    </Pressable>
+                  </View>
+                </View>
+
                 <FormField
                   label={`Monto a abonar (${sym})`}
                   keyboardType="decimal-pad"
@@ -619,8 +732,8 @@ export default function PagosVentasScreen() {
                   onChangeText={setAbonoNotes}
                 />
                 <PrimaryButton
-                  label="Guardar Abono"
-                  icon="cash-outline"
+                  label="Aplicar Abono"
+                  icon="checkmark-circle-outline"
                   variant="success"
                   onPress={handleRegisterAbono}
                 />
@@ -630,6 +743,15 @@ export default function PagosVentasScreen() {
             <View style={styles.row2}>
               <View style={{ flex: 1 }}>
                 <PrimaryButton
+                  label="WhatsApp"
+                  icon="logo-whatsapp"
+                  variant="success"
+                  small
+                  onPress={() => handleSendWhatsApp(activeSaleDetail)}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <PrimaryButton
                   label="Copiar Recibo"
                   icon="copy-outline"
                   variant="outline"
@@ -637,26 +759,26 @@ export default function PagosVentasScreen() {
                   onPress={() => handleCopyReceipt(activeSaleDetail)}
                 />
               </View>
-              <View style={{ flex: 1 }}>
-                <PrimaryButton
-                  label="Anular y Devolver Stock"
-                  icon="trash-outline"
-                  variant="danger"
-                  small
-                  onPress={() =>
-                    confirmAction(
-                      'Anular venta',
-                      `¿Anular ${activeSaleDetail.folio} y reintegrar las unidades al stock?`,
-                      async () => {
-                        await deleteSale(activeSaleDetail.id, true);
-                        setSelectedSale(null);
-                      },
-                      Alert
-                    )
-                  }
-                />
-              </View>
             </View>
+
+            <PrimaryButton
+              label="Anular Venta y Reintegrar Stock"
+              icon="trash-outline"
+              variant="danger"
+              small
+              onPress={() =>
+                confirmAction(
+                  'Anular venta',
+                  `¿Anular ${activeSaleDetail.folio} y devolver las unidades al stock?`,
+                  async () => {
+                    await deleteSale(activeSaleDetail.id, true);
+                    setSelectedSale(null);
+                    showToast('Venta anulada y stock restaurado', 'info');
+                  },
+                  Alert
+                )
+              }
+            />
           </View>
         ) : null}
       </BottomSheetModal>
@@ -666,49 +788,29 @@ export default function PagosVentasScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
-  newSaleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-  },
-  newSaleBtnText: { color: COLORS.primary, fontSize: 12, fontWeight: '800' },
-  topControls: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6, gap: 8 },
-  searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  searchInput: { flex: 1, fontSize: 14, color: COLORS.text, paddingVertical: 0 },
-  listContent: { padding: 16, paddingTop: 8, paddingBottom: 32, gap: 12 },
+  topControls: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6, gap: 9 },
+  listContent: { padding: 16, paddingTop: 8, paddingBottom: 34, gap: 12 },
   saleCard: {
     backgroundColor: COLORS.surface,
-    borderRadius: 15,
+    borderRadius: 16,
     padding: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
-    gap: 8,
+    gap: 10,
     ...SHADOWS.card,
   },
   saleHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  folioText: { fontSize: 13, fontWeight: '800', color: COLORS.primary },
+  folioText: { fontSize: 13, fontWeight: '800', color: COLORS.accentDark },
   customerText: { color: COLORS.text, fontSize: 14.5 },
   dateText: { fontSize: 11.5, color: COLORS.textMuted, marginTop: 2 },
   itemsSummary: {
     fontSize: 12.5,
     color: COLORS.textSecondary,
-    backgroundColor: COLORS.background,
-    padding: 8,
-    borderRadius: 8,
+    backgroundColor: COLORS.surfaceWarm,
+    padding: 9,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: COLORS.borderSubtle,
   },
   saleFooter: {
     flexDirection: 'row',
@@ -716,48 +818,55 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: 4,
   },
-  totalText: { fontSize: 15, fontWeight: '800', color: COLORS.text },
+  totalText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.text,
+    fontVariant: ['tabular-nums'],
+  },
   paidSubText: { fontSize: 11.5, color: COLORS.textSecondary, marginTop: 1 },
-  cardActionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cardActionRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   payNowPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: COLORS.warning,
+    backgroundColor: COLORS.accent,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 8,
+    borderRadius: 999,
   },
-  payNowText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
-  copyIconBtn: {
-    padding: 7,
-    borderRadius: 8,
-    backgroundColor: COLORS.primaryLight,
+  payNowText: { color: COLORS.primaryDark, fontSize: 11.5, fontWeight: '800' },
+  iconCircleBtn: {
+    width: 31,
+    height: 31,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sectionSubtitle: {
     fontSize: 13.5,
     fontWeight: '800',
     color: COLORS.primary,
-    marginTop: 4,
+    marginTop: 2,
     marginBottom: 6,
   },
   inlineSearch: {
-    backgroundColor: COLORS.background,
+    backgroundColor: COLORS.surfaceWarm,
     borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: 10,
+    borderRadius: 11,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 13,
+    paddingVertical: 9,
+    fontSize: 13.5,
     color: COLORS.text,
     marginBottom: 8,
   },
   catalogPickerBox: {
-    maxHeight: 200,
+    maxHeight: 210,
     borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: 12,
-    backgroundColor: COLORS.background,
+    borderRadius: 13,
+    backgroundColor: COLORS.surfaceWarm,
     padding: 8,
     marginBottom: 10,
   },
@@ -765,10 +874,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 6,
+    paddingVertical: 7,
+    paddingHorizontal: 6,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: COLORS.borderSubtle,
+    borderRadius: 8,
     gap: 8,
+  },
+  pickerRowSelected: {
+    backgroundColor: COLORS.primaryLight,
   },
   pickerName: { fontSize: 13, fontWeight: '700', color: COLORS.text },
   pickerMeta: { fontSize: 11.5, color: COLORS.textSecondary },
@@ -777,7 +891,9 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 8,
-    backgroundColor: COLORS.primaryLight,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -786,35 +902,65 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: COLORS.accentLight,
-    padding: 12,
-    borderRadius: 10,
+    backgroundColor: COLORS.primary,
+    padding: 13,
+    borderRadius: 12,
     marginBottom: 12,
   },
-  cartSummaryLabel: { fontSize: 13, color: COLORS.textSecondary, fontWeight: '600' },
-  cartSummaryTotal: { fontSize: 16, color: COLORS.primary, fontWeight: '900' },
+  cartSummaryLabel: { fontSize: 12.5, color: '#D3E1DA', fontWeight: '600' },
+  discountNote: { fontSize: 11, color: COLORS.accent, fontWeight: '700', marginTop: 2 },
+  cartSummaryTotal: {
+    fontSize: 18,
+    color: COLORS.ivory,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
   row2: { flexDirection: 'row', gap: 10 },
+  presetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    gap: 6,
+  },
+  presetHint: { fontSize: 12, color: COLORS.textSecondary, fontWeight: '600' },
+  presetChip: {
+    backgroundColor: COLORS.accentLight,
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  presetChipText: { fontSize: 11.5, fontWeight: '800', color: COLORS.accentDark },
   fieldMiniLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: COLORS.textSecondary,
+    color: COLORS.primary,
     marginBottom: 4,
   },
   detailBalanceCard: {
-    backgroundColor: COLORS.surfaceAlt,
-    borderRadius: 12,
-    padding: 12,
-    gap: 6,
+    backgroundColor: COLORS.ivory,
+    borderRadius: 14,
+    padding: 13,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    gap: 7,
   },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between' },
   detailMuted: { fontSize: 13, color: COLORS.textSecondary, fontWeight: '600' },
-  detailBold: { fontSize: 14, fontWeight: '800', color: COLORS.text },
+  detailBold: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.text,
+    fontVariant: ['tabular-nums'],
+  },
   itemLine: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: COLORS.borderSubtle,
   },
   itemLineText: { fontSize: 13, color: COLORS.text },
   itemLineAmount: { fontSize: 13, fontWeight: '700', color: COLORS.text },
@@ -830,9 +976,9 @@ const styles = StyleSheet.create({
   payMetaText: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
   payAmountText: { fontSize: 14, fontWeight: '800', color: COLORS.success },
   abonoBox: {
-    backgroundColor: COLORS.background,
-    padding: 12,
-    borderRadius: 12,
+    backgroundColor: COLORS.surfaceWarm,
+    padding: 13,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
   },

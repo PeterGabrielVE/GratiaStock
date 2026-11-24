@@ -5,10 +5,10 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useStore } from '../../context/StoreContext';
 import {
@@ -23,15 +23,21 @@ import {
   ChipSelector,
   EmptyState,
   FormField,
+  HeaderActionPill,
   PrimaryButton,
+  ProgressBar,
   ScreenHeader,
+  SearchField,
   confirmAction,
+  useToast,
 } from '../../components/UI';
 import { formatCurrency, formatDateTime, parseNumericInput } from '../../utils/format';
 
 type FilterTab = 'Todas' | 'Bajo Stock' | ProductCategory;
 
 export default function StockScreen() {
+  const params = useLocalSearchParams<{ open?: string }>();
+  const { showToast } = useToast();
   const {
     settings,
     products,
@@ -49,6 +55,7 @@ export default function StockScreen() {
 
   // Modal Crear / Editar Producto
   const [formOpen, setFormOpen] = useState(false);
+  const [dismissedOpenParam, setDismissedOpenParam] = useState<string | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [sku, setSku] = useState('');
   const [name, setName] = useState('');
@@ -56,17 +63,25 @@ export default function StockScreen() {
   const [editionOrDetail, setEditionOrDetail] = useState('');
   const [costPrice, setCostPrice] = useState('');
   const [salePrice, setSalePrice] = useState('');
-  const [stock, setStock] = useState('');
-  const [minStock, setMinStock] = useState('');
+  const [stock, setStock] = useState('0');
+  const [minStock, setMinStock] = useState(String(settings.defaultMinStock));
   const [location, setLocation] = useState('');
   const [supplierId, setSupplierId] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
 
-  // Modal Ajuste Rápido de Stock
+  // Modal Ajuste por Lote
   const [adjustTarget, setAdjustTarget] = useState<Product | null>(null);
   const [adjustMode, setAdjustMode] = useState<'in' | 'out'>('in');
-  const [adjustQty, setAdjustQty] = useState('1');
+  const [adjustQty, setAdjustQty] = useState('5');
   const [adjustReason, setAdjustReason] = useState('');
+
+  const isModalVisible =
+    formOpen || Boolean(params.open && params.open !== dismissedOpenParam);
+
+  const closeProductModal = () => {
+    setFormOpen(false);
+    if (params.open) setDismissedOpenParam(params.open);
+  };
 
   const filterOptions: FilterTab[] = useMemo(
     () => ['Todas', 'Bajo Stock', ...PRODUCT_CATEGORIES],
@@ -77,6 +92,13 @@ export default function StockScreen() {
     () => new Map(suppliers.map((s) => [s.id, s.name])),
     [suppliers]
   );
+
+  const summary = useMemo(() => {
+    const units = products.reduce((s, p) => s + p.stock, 0);
+    const retailValue = products.reduce((s, p) => s + p.stock * p.salePrice, 0);
+    const lowCount = products.filter((p) => p.stock <= p.minStock).length;
+    return { units, retailValue, lowCount };
+  }, [products]);
 
   const filteredProducts = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -101,7 +123,7 @@ export default function StockScreen() {
 
   const openNewModal = () => {
     setEditingId(undefined);
-    setSku(`CAT-${String(products.length + 1).padStart(3, '0')}`);
+    setSku(`GRA-${String(products.length + 1).padStart(3, '0')}`);
     setName('');
     setCategory('Biblias Católicas');
     setEditionOrDetail('');
@@ -131,31 +153,50 @@ export default function StockScreen() {
     setFormOpen(true);
   };
 
+  // Vista previa en vivo de ganancia y margen dentro del modal
+  const liveCost = Math.max(0, parseNumericInput(costPrice));
+  const liveSale = Math.max(0, parseNumericInput(salePrice));
+  const liveProfit = liveSale - liveCost;
+  const liveMarginPct = liveSale > 0 ? Math.round((liveProfit / liveSale) * 100) : 0;
+
   const handleSaveProduct = async () => {
     if (!name.trim()) {
       Alert.alert('Campo requerido', 'Ingresa el nombre del artículo católico.');
       return;
     }
-    const cost = Math.max(0, parseNumericInput(costPrice));
-    const sale = Math.max(0, parseNumericInput(salePrice));
     const currentStock = Math.max(0, Math.round(parseNumericInput(stock)));
     const minimum = Math.max(0, Math.round(parseNumericInput(minStock)));
 
     await saveProduct({
       id: editingId,
-      sku: sku.trim() || `CAT-${Date.now().toString().slice(-4)}`,
+      sku: sku.trim() || `GRA-${String(products.length + 1).padStart(3, '0')}`,
       name: name.trim(),
       category,
       editionOrDetail: editionOrDetail.trim(),
-      costPrice: cost,
-      salePrice: sale,
+      costPrice: liveCost,
+      salePrice: liveSale,
       stock: currentStock,
       minStock: minimum,
       location: location.trim(),
       supplierId,
       notes: notes.trim(),
     });
-    setFormOpen(false);
+    closeProductModal();
+    showToast(editingId ? 'Producto actualizado' : 'Producto agregado al catálogo');
+  };
+
+  const handleQuickStep = async (prod: Product, delta: 1 | -1) => {
+    if (delta < 0 && prod.stock <= 0) return;
+    await adjustStock(
+      prod.id,
+      delta,
+      delta > 0 ? 'in' : 'out',
+      delta > 0 ? 'Ajuste rápido (+1)' : 'Ajuste rápido (-1)'
+    );
+    showToast(
+      `${prod.name}: ${delta > 0 ? '+1 unidad' : '-1 unidad'} (Stock: ${prod.stock + delta})`,
+      delta > 0 ? 'success' : 'info'
+    );
   };
 
   const handleConfirmAdjustment = async () => {
@@ -169,50 +210,75 @@ export default function StockScreen() {
       adjustReason.trim() ||
         (adjustMode === 'in' ? 'Reposición de inventario' : 'Salida / Merma / Donación')
     );
+    showToast(
+      `Kardex actualizado (${adjustMode === 'in' ? `+${qty}` : `-${qty}`} uds.)`,
+      'success'
+    );
     setAdjustTarget(null);
-    setAdjustQty('1');
+    setAdjustQty('5');
     setAdjustReason('');
   };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScreenHeader
-        title="Control de Stock"
-        subtitle={`${products.length} productos · Biblias, Camándulas y Liturgia`}
+        title="Catálogo y Stock"
+        subtitle="Biblias Católicas, Camándulas y Artículos Sagrados"
         rightAction={
           <View style={styles.headerActions}>
-            <Pressable
+            <HeaderActionPill
+              label="Kardex"
+              icon="swap-vertical-outline"
+              variant="glass"
               onPress={() => setShowKardexModal(true)}
-              style={styles.iconPill}
-            >
-              <Ionicons name="swap-vertical-outline" size={16} color="#FFFFFF" />
-              <Text style={styles.iconPillText}>Kardex</Text>
-            </Pressable>
-            <Pressable onPress={openNewModal} style={styles.addHeaderBtn}>
-              <Ionicons name="add" size={18} color={COLORS.primary} />
-              <Text style={styles.addHeaderText}>Nuevo</Text>
-            </Pressable>
+            />
+            <HeaderActionPill
+              label="Nuevo"
+              icon="add"
+              variant="gold"
+              onPress={openNewModal}
+            />
           </View>
         }
       />
 
-      {/* Buscador y Filtros */}
-      <View style={styles.topFilters}>
-        <View style={styles.searchBox}>
-          <Ionicons name="search-outline" size={18} color={COLORS.textMuted} />
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Buscar Biblia, camándula, SKU o edición..."
-            placeholderTextColor={COLORS.textMuted}
-            style={styles.searchInput}
-          />
-          {search.length > 0 ? (
-            <Pressable onPress={() => setSearch('')}>
-              <Ionicons name="close-circle" size={18} color={COLORS.textMuted} />
-            </Pressable>
-          ) : null}
+      {/* Cinta Resumen Rápida */}
+      <View style={styles.summaryRibbon}>
+        <View style={styles.ribbonCell}>
+          <Text style={styles.ribbonVal}>{summary.units}</Text>
+          <Text style={styles.ribbonLbl}>Unidades</Text>
         </View>
+        <View style={styles.ribbonDivider} />
+        <View style={styles.ribbonCell}>
+          <Text style={styles.ribbonVal}>{formatCurrency(summary.retailValue, sym)}</Text>
+          <Text style={styles.ribbonLbl}>Valor Venta</Text>
+        </View>
+        <View style={styles.ribbonDivider} />
+        <Pressable
+          onPress={() =>
+            setSelectedFilter(selectedFilter === 'Bajo Stock' ? 'Todas' : 'Bajo Stock')
+          }
+          style={styles.ribbonCell}
+        >
+          <Text
+            style={[
+              styles.ribbonVal,
+              { color: summary.lowCount > 0 ? COLORS.danger : COLORS.success },
+            ]}
+          >
+            {summary.lowCount}
+          </Text>
+          <Text style={styles.ribbonLbl}>Stock Bajo ▾</Text>
+        </Pressable>
+      </View>
+
+      {/* Buscador y Categorías */}
+      <View style={styles.topFilters}>
+        <SearchField
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Buscar Biblia, camándula, SKU o edición..."
+        />
         <ChipSelector
           options={filterOptions}
           selected={selectedFilter}
@@ -227,7 +293,7 @@ export default function StockScreen() {
         ListEmptyComponent={
           <EmptyState
             icon="book-outline"
-            title="No se encontraron productos"
+            title="Sin artículos en esta vista"
             description="Agrega Biblias Católicas, camándulas, rosarios o devocionarios a tu catálogo."
             actionLabel="Agregar Producto"
             onAction={openNewModal}
@@ -239,6 +305,8 @@ export default function StockScreen() {
             item.salePrice > 0
               ? Math.round(((item.salePrice - item.costPrice) / item.salePrice) * 100)
               : 0;
+          const stockHealth =
+            item.minStock > 0 ? Math.min(1, item.stock / (item.minStock * 2.5)) : 1;
 
           return (
             <View style={styles.productCard}>
@@ -254,20 +322,49 @@ export default function StockScreen() {
                   ) : null}
                 </View>
 
-                <View style={styles.stockBox}>
-                  <Text
-                    style={[
-                      styles.stockCount,
-                      { color: isLow ? COLORS.danger : COLORS.success },
-                    ]}
-                  >
-                    {item.stock}
-                  </Text>
+                {/* Control directo +/-1 de stock */}
+                <View style={styles.quickStockBox}>
+                  <View style={styles.stepperRow}>
+                    <Pressable
+                      disabled={item.stock <= 0}
+                      onPress={() => handleQuickStep(item, -1)}
+                      style={[
+                        styles.stepMiniBtn,
+                        item.stock <= 0 && { opacity: 0.35 },
+                      ]}
+                    >
+                      <Ionicons name="remove" size={14} color={COLORS.primary} />
+                    </Pressable>
+                    <Text
+                      style={[
+                        styles.stockCount,
+                        { color: isLow ? COLORS.danger : COLORS.primary },
+                      ]}
+                    >
+                      {item.stock}
+                    </Text>
+                    <Pressable
+                      onPress={() => handleQuickStep(item, 1)}
+                      style={styles.stepMiniBtn}
+                    >
+                      <Ionicons name="add" size={14} color={COLORS.primary} />
+                    </Pressable>
+                  </View>
                   <Text style={styles.stockLabel}>
-                    {isLow ? `Mín ${item.minStock}` : 'en stock'}
+                    {item.stock === 0
+                      ? 'AGOTADO'
+                      : isLow
+                        ? `Mín ${item.minStock}`
+                        : 'unidades'}
                   </Text>
                 </View>
               </View>
+
+              <ProgressBar
+                progress={stockHealth}
+                tone={item.stock === 0 ? 'danger' : isLow ? 'warning' : 'success'}
+                height={5}
+              />
 
               <View style={styles.priceRow}>
                 <Text style={styles.priceItem}>
@@ -279,14 +376,14 @@ export default function StockScreen() {
                     {formatCurrency(item.salePrice, sym)}
                   </Text>
                 </Text>
-                <Badge text={`Margen ${margin}%`} tone="info" />
+                <Badge text={`Margen ${margin}%`} tone="accent" />
               </View>
 
               <View style={styles.metaFooter}>
                 <Text style={styles.metaText} numberOfLines={1}>
-                  {item.location ? `📍 ${item.location}` : '📍 Sin estante'}
+                  {item.location ? `📍 ${item.location}` : '📍 General'}
                   {item.supplierId && supplierMap.get(item.supplierId)
-                    ? ` · 🏢 ${supplierMap.get(item.supplierId)}`
+                    ? ` · ${supplierMap.get(item.supplierId)}`
                     : ''}
                 </Text>
 
@@ -295,20 +392,20 @@ export default function StockScreen() {
                     onPress={() => {
                       setAdjustTarget(item);
                       setAdjustMode('in');
-                      setAdjustQty('1');
+                      setAdjustQty('5');
                       setAdjustReason('');
                     }}
-                    style={[styles.miniBtn, { backgroundColor: COLORS.successLight }]}
+                    style={[styles.miniBtn, { backgroundColor: COLORS.primaryLight }]}
                   >
-                    <Ionicons name="add" size={15} color={COLORS.success} />
-                    <Text style={[styles.miniBtnText, { color: COLORS.success }]}>Stock</Text>
+                    <Ionicons name="layers-outline" size={14} color={COLORS.primary} />
+                    <Text style={[styles.miniBtnText, { color: COLORS.primary }]}>Lote</Text>
                   </Pressable>
 
                   <Pressable
                     onPress={() => openEditModal(item)}
                     style={[styles.miniBtn, { backgroundColor: COLORS.surfaceAlt }]}
                   >
-                    <Ionicons name="create-outline" size={15} color={COLORS.text} />
+                    <Ionicons name="create-outline" size={14} color={COLORS.text} />
                     <Text style={styles.miniBtnText}>Editar</Text>
                   </Pressable>
 
@@ -317,13 +414,16 @@ export default function StockScreen() {
                       confirmAction(
                         'Eliminar producto',
                         `¿Seguro que deseas eliminar "${item.name}" del catálogo?`,
-                        () => deleteProduct(item.id),
+                        async () => {
+                          await deleteProduct(item.id);
+                          showToast('Producto eliminado', 'info');
+                        },
                         Alert
                       )
                     }
                     style={[styles.miniBtn, { backgroundColor: COLORS.dangerLight }]}
                   >
-                    <Ionicons name="trash-outline" size={15} color={COLORS.danger} />
+                    <Ionicons name="trash-outline" size={14} color={COLORS.danger} />
                   </Pressable>
                 </View>
               </View>
@@ -334,13 +434,14 @@ export default function StockScreen() {
 
       {/* Modal Crear / Editar Producto */}
       <BottomSheetModal
-        visible={formOpen}
-        title={editingId ? 'Editar Producto Católico' : 'Nuevo Producto Católico'}
-        onClose={() => setFormOpen(false)}
+        visible={isModalVisible}
+        title={editingId ? 'Editar Artículo Católico' : 'Nuevo Artículo Católico'}
+        subtitle="Completa los detalles de catálogo, costos y alerta de stock"
+        onClose={closeProductModal}
       >
         <FormField
           label="Nombre del producto *"
-          placeholder="Ej. Biblia Católica Latinoamericana / Camándula San Benito"
+          placeholder="Ej. Biblia Católica Latinoamericana / Camándula Olivo"
           value={name}
           onChangeText={setName}
         />
@@ -352,9 +453,9 @@ export default function StockScreen() {
           onSelect={setCategory}
         />
 
-        <View style={{ height: 10 }} />
+        <View style={{ height: 11 }} />
         <FormField
-          label="Edición / Material / Detalle"
+          label="Edición / Material / Presentación"
           placeholder="Ej. Letra Grande Tapa Dura / Madera de Olivo 8mm"
           value={editionOrDetail}
           onChangeText={setEditionOrDetail}
@@ -364,14 +465,14 @@ export default function StockScreen() {
           <View style={{ flex: 1 }}>
             <FormField
               label="Código / SKU"
-              placeholder="BIB-001"
+              placeholder="GRA-001"
               value={sku}
               onChangeText={setSku}
             />
           </View>
           <View style={{ flex: 1 }}>
             <FormField
-              label="Ubicación / Estante"
+              label="Ubicación / Vitrina"
               placeholder="Estante A1"
               value={location}
               onChangeText={setLocation}
@@ -399,6 +500,18 @@ export default function StockScreen() {
             />
           </View>
         </View>
+
+        {/* Vista previa instantánea de ganancia */}
+        {liveSale > 0 ? (
+          <View style={styles.marginPreviewBox}>
+            <Text style={styles.marginPreviewText}>
+              Ganancia por unidad:{' '}
+              <Text style={{ fontWeight: '800', color: COLORS.primary }}>
+                {formatCurrency(liveProfit, sym)} ({liveMarginPct}% margen)
+              </Text>
+            </Text>
+          </View>
+        ) : null}
 
         <View style={styles.row2}>
           <View style={{ flex: 1 }}>
@@ -448,27 +561,31 @@ export default function StockScreen() {
 
         <FormField
           label="Notas internas"
-          placeholder="Observaciones pastorales, ISBN o detalles del artículo..."
+          placeholder="Observaciones pastorales, ISBN o detalles..."
           multiline
           value={notes}
           onChangeText={setNotes}
         />
 
         <PrimaryButton
-          label={editingId ? 'Guardar Cambios' : 'Registrar Producto'}
+          label={editingId ? 'Guardar Cambios' : 'Registrar en Catálogo'}
           icon="checkmark-circle-outline"
           onPress={handleSaveProduct}
         />
       </BottomSheetModal>
 
-      {/* Modal Ajuste Rápido de Stock */}
+      {/* Modal Ajuste por Lote */}
       <BottomSheetModal
         visible={Boolean(adjustTarget)}
-        title={`Ajustar Stock · ${adjustTarget?.name ?? ''}`}
+        title={`Movimiento de Lote`}
+        subtitle={adjustTarget?.name ?? ''}
         onClose={() => setAdjustTarget(null)}
       >
         <Text style={styles.currentStockBanner}>
-          Stock actual: <Text style={{ fontWeight: '800' }}>{adjustTarget?.stock ?? 0} unidades</Text>
+          Existencia actual:{' '}
+          <Text style={{ fontWeight: '800', color: COLORS.primary }}>
+            {adjustTarget?.stock ?? 0} unidades
+          </Text>
         </Text>
 
         <View style={styles.row2}>
@@ -498,13 +615,13 @@ export default function StockScreen() {
           onChangeText={setAdjustQty}
         />
         <FormField
-          label="Motivo del movimiento"
-          placeholder="Ej. Llegada de pedido / Donación a catequesis / Conteo físico"
+          label="Motivo para el Kardex"
+          placeholder="Ej. Recepción de editorial / Donación parroquial"
           value={adjustReason}
           onChangeText={setAdjustReason}
         />
         <PrimaryButton
-          label="Aplicar Movimiento al Kardex"
+          label="Registrar Movimiento"
           icon="save-outline"
           onPress={handleConfirmAdjustment}
         />
@@ -513,7 +630,8 @@ export default function StockScreen() {
       {/* Modal Historial Kardex */}
       <BottomSheetModal
         visible={showKardexModal}
-        title="Historial Kardex de Inventario"
+        title="Historial Kardex"
+        subtitle="Últimos movimientos de entradas, ventas y ajustes"
         onClose={() => setShowKardexModal(false)}
       >
         {stockMovements.length === 0 ? (
@@ -521,7 +639,7 @@ export default function StockScreen() {
             Aún no hay movimientos registrados.
           </Text>
         ) : (
-          stockMovements.slice(0, 40).map((mov) => (
+          stockMovements.slice(0, 50).map((mov) => (
             <View key={mov.id} style={styles.kardexRow}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.kardexTitle}>{mov.productName}</Text>
@@ -547,49 +665,35 @@ export default function StockScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  iconPill: {
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  summaryRibbon: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: COLORS.ivory,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
   },
-  iconPillText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
-  addHeaderBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    borderRadius: 999,
+  ribbonCell: { flex: 1, alignItems: 'center' },
+  ribbonDivider: { width: 1, height: 26, backgroundColor: COLORS.border },
+  ribbonVal: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.primary,
+    fontVariant: ['tabular-nums'],
   },
-  addHeaderText: { color: COLORS.primary, fontSize: 12, fontWeight: '800' },
+  ribbonLbl: { fontSize: 11, color: COLORS.textSecondary, fontWeight: '600', marginTop: 1 },
   topFilters: {
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 6,
-    gap: 8,
+    gap: 9,
   },
-  searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  searchInput: { flex: 1, fontSize: 14, color: COLORS.text, paddingVertical: 0 },
-  listContent: { padding: 16, paddingTop: 8, paddingBottom: 32, gap: 12 },
+  listContent: { padding: 16, paddingTop: 8, paddingBottom: 34, gap: 12 },
   productCard: {
     backgroundColor: COLORS.surface,
-    borderRadius: 15,
+    borderRadius: 16,
     padding: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -601,41 +705,60 @@ const styles = StyleSheet.create({
   skuText: { fontSize: 11, fontWeight: '700', color: COLORS.textMuted },
   productName: { fontSize: 15, fontWeight: '800', color: COLORS.text },
   editionText: { fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
-  stockBox: {
-    minWidth: 62,
+  quickStockBox: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.background,
-    borderRadius: 12,
-    paddingHorizontal: 10,
+    backgroundColor: COLORS.surfaceWarm,
+    borderRadius: 13,
+    paddingHorizontal: 8,
     paddingVertical: 6,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  stockCount: { fontSize: 20, fontWeight: '900' },
-  stockLabel: { fontSize: 10, fontWeight: '700', color: COLORS.textMuted },
+  stepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  stepMiniBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    backgroundColor: COLORS.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stockCount: {
+    minWidth: 24,
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+  stockLabel: { fontSize: 10, fontWeight: '700', color: COLORS.textMuted, marginTop: 2 },
   priceRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
+    paddingTop: 6,
   },
   priceItem: { fontSize: 12.5, color: COLORS.textSecondary },
-  priceStrong: { fontWeight: '800', color: COLORS.text },
+  priceStrong: { fontWeight: '800', color: COLORS.text, fontVariant: ['tabular-nums'] },
   metaFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.borderSubtle,
   },
   metaText: { flex: 1, fontSize: 11.5, color: COLORS.textMuted },
   cardActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   miniBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    gap: 4,
     paddingHorizontal: 9,
     paddingVertical: 6,
     borderRadius: 8,
@@ -644,10 +767,23 @@ const styles = StyleSheet.create({
   modalSectionLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: COLORS.textSecondary,
+    color: COLORS.primary,
     marginBottom: 6,
   },
   row2: { flexDirection: 'row', gap: 10 },
+  marginPreviewBox: {
+    backgroundColor: COLORS.accentLight,
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  marginPreviewText: {
+    fontSize: 12.5,
+    color: COLORS.text,
+  },
   supplierWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -655,12 +791,12 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   supChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
+    paddingHorizontal: 11,
+    paddingVertical: 6.5,
+    borderRadius: 9,
     borderWidth: 1,
     borderColor: COLORS.border,
-    backgroundColor: COLORS.background,
+    backgroundColor: COLORS.surfaceWarm,
   },
   supChipActive: {
     backgroundColor: COLORS.primaryLight,
@@ -671,9 +807,11 @@ const styles = StyleSheet.create({
   currentStockBanner: {
     fontSize: 14,
     color: COLORS.text,
-    backgroundColor: COLORS.surfaceAlt,
-    padding: 10,
-    borderRadius: 10,
+    backgroundColor: COLORS.surfaceWarm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 11,
+    borderRadius: 11,
     marginBottom: 12,
     textAlign: 'center',
   },
@@ -683,7 +821,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: COLORS.borderSubtle,
     gap: 10,
   },
   kardexTitle: { fontSize: 13.5, fontWeight: '700', color: COLORS.text },

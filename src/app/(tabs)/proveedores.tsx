@@ -6,26 +6,29 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useStore } from '../../context/StoreContext';
 import { Supplier } from '../../types/models';
-import { COLORS, SHADOWS } from '../../constants/theme';
+import { COLORS, SERIF_FONT, SHADOWS } from '../../constants/theme';
 import {
   Badge,
   BottomSheetModal,
   EmptyState,
   FormField,
+  HeaderActionPill,
   PrimaryButton,
   ScreenHeader,
+  SearchField,
   confirmAction,
+  useToast,
 } from '../../components/UI';
 import { formatCurrency } from '../../utils/format';
 
 export default function ProveedoresScreen() {
+  const { showToast } = useToast();
   const {
     settings,
     suppliers,
@@ -103,6 +106,7 @@ export default function ProveedoresScreen() {
       notes: notes.trim(),
     });
     setModalOpen(false);
+    showToast(editingId ? 'Proveedor actualizado' : 'Proveedor registrado');
   };
 
   const openWhatsApp = (rawPhone: string) => {
@@ -123,34 +127,31 @@ export default function ProveedoresScreen() {
   const openEmail = (addr: string) => {
     if (!addr.trim()) return;
     Linking.openURL(`mailto:${addr.trim()}`).catch(() => {
-      Alert.alert('Error', 'No se pudo abrir la aplicación de correo.');
+      Alert.alert('Error', 'No se pudo abrir el correo.');
     });
   };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScreenHeader
-        title="Proveedores y Editoriales"
-        subtitle={`${suppliers.length} aliados de distribución católica`}
+        title="Proveedores"
+        subtitle={`${suppliers.length} editoriales y talleres aliados`}
         rightAction={
-          <Pressable onPress={openNewModal} style={styles.headerBtn}>
-            <Ionicons name="person-add-outline" size={16} color={COLORS.primary} />
-            <Text style={styles.headerBtnText}>Agregar</Text>
-          </Pressable>
+          <HeaderActionPill
+            label="Agregar"
+            icon="person-add-outline"
+            variant="gold"
+            onPress={openNewModal}
+          />
         }
       />
 
       <View style={styles.searchWrap}>
-        <View style={styles.searchBox}>
-          <Ionicons name="search-outline" size={18} color={COLORS.textMuted} />
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Buscar editorial, taller de camándulas, ciudad..."
-            placeholderTextColor={COLORS.textMuted}
-            style={styles.searchInput}
-          />
-        </View>
+        <SearchField
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Buscar editorial, taller de camándulas o ciudad..."
+        />
       </View>
 
       <FlatList
@@ -160,8 +161,8 @@ export default function ProveedoresScreen() {
         ListEmptyComponent={
           <EmptyState
             icon="people-outline"
-            title="Sin proveedores registrados"
-            description="Registra editoriales bíblicas, talleres de rosarios, librerías diocesanas y mayoristas."
+            title="Sin proveedores en directorio"
+            description="Registra editoriales bíblicas, talleres de rosarios y distribuidores religiosos."
             actionLabel="Nuevo Proveedor"
             onAction={openNewModal}
           />
@@ -174,39 +175,50 @@ export default function ProveedoresScreen() {
             (s, i) => s + Math.max(0, i.amount - i.paidAmount),
             0
           );
+          const initials = item.name
+            .split(' ')
+            .slice(0, 2)
+            .map((w) => w[0] ?? '')
+            .join('')
+            .toUpperCase();
 
           return (
             <View style={styles.supCard}>
               <View style={styles.cardTop}>
+                <View style={styles.avatarMonogram}>
+                  <Text style={styles.avatarText}>{initials || 'GR'}</Text>
+                </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.supName}>{item.name}</Text>
-                  <Text style={styles.specialtyText}>{item.specialty || 'Artículos religiosos'}</Text>
+                  <Text style={styles.specialtyText}>
+                    {item.specialty || 'Artículos religiosos'}
+                  </Text>
                 </View>
-                <Badge text={`${linkedProducts} prod.`} tone="primary" />
+                <Badge text={`${linkedProducts} ítems`} tone="accent" />
               </View>
 
               <View style={styles.infoBlock}>
                 {item.contactName ? (
-                  <Text style={styles.infoRow}>👤 Contacto: {item.contactName}</Text>
+                  <Text style={styles.infoRow}>👤 {item.contactName}</Text>
                 ) : null}
-                {item.city ? <Text style={styles.infoRow}>📍 Ciudad: {item.city}</Text> : null}
+                {item.city ? <Text style={styles.infoRow}>📍 {item.city}</Text> : null}
                 {item.paymentTerms ? (
-                  <Text style={styles.infoRow}>🤝 Condiciones: {item.paymentTerms}</Text>
+                  <Text style={styles.infoRow}>🤝 {item.paymentTerms}</Text>
                 ) : null}
                 {item.notes ? <Text style={styles.notesRow}>{item.notes}</Text> : null}
               </View>
 
               <View style={styles.statsStrip}>
                 <Text style={styles.statText}>
-                  Comprado: <Text style={styles.statStrong}>{formatCurrency(totalPurchased, sym)}</Text>
+                  Compras: <Text style={styles.statStrong}>{formatCurrency(totalPurchased, sym)}</Text>
                 </Text>
                 <Text
                   style={[
                     styles.statText,
-                    { color: debt > 0 ? COLORS.danger : COLORS.success },
+                    { color: debt > 0 ? COLORS.warning : COLORS.success },
                   ]}
                 >
-                  {debt > 0 ? `Por pagar: ${formatCurrency(debt, sym)}` : 'Sin deuda'}
+                  {debt > 0 ? `Saldo: ${formatCurrency(debt, sym)}` : 'Al día'}
                 </Text>
               </View>
 
@@ -218,7 +230,7 @@ export default function ProveedoresScreen() {
                         onPress={() => openWhatsApp(item.phone)}
                         style={[styles.iconBtn, { backgroundColor: COLORS.successLight }]}
                       >
-                        <Ionicons name="logo-whatsapp" size={16} color={COLORS.success} />
+                        <Ionicons name="logo-whatsapp" size={15} color={COLORS.success} />
                         <Text style={[styles.iconBtnLabel, { color: COLORS.success }]}>
                           WhatsApp
                         </Text>
@@ -236,7 +248,7 @@ export default function ProveedoresScreen() {
                       onPress={() => openEmail(item.email)}
                       style={[styles.iconBtn, { backgroundColor: COLORS.accentLight }]}
                     >
-                      <Ionicons name="mail-outline" size={15} color={COLORS.accent} />
+                      <Ionicons name="mail-outline" size={15} color={COLORS.accentDark} />
                     </Pressable>
                   ) : null}
                 </View>
@@ -253,8 +265,11 @@ export default function ProveedoresScreen() {
                     onPress={() =>
                       confirmAction(
                         'Eliminar proveedor',
-                        `¿Eliminar a "${item.name}"? Sus productos conservarán el stock sin proveedor asignado.`,
-                        () => deleteSupplier(item.id),
+                        `¿Eliminar a "${item.name}"? Sus artículos conservarán el stock.`,
+                        async () => {
+                          await deleteSupplier(item.id);
+                          showToast('Proveedor eliminado', 'info');
+                        },
                         Alert
                       )
                     }
@@ -272,10 +287,11 @@ export default function ProveedoresScreen() {
       <BottomSheetModal
         visible={modalOpen}
         title={editingId ? 'Editar Proveedor' : 'Nuevo Proveedor / Editorial'}
+        subtitle="Datos de contacto directo y acuerdos comerciales"
         onClose={() => setModalOpen(false)}
       >
         <FormField
-          label="Nombre de la Editorial o Proveedor *"
+          label="Nombre de la Editorial o Taller *"
           placeholder="Ej. Editorial Verbo Divino / San Pablo"
           value={name}
           onChangeText={setName}
@@ -284,7 +300,7 @@ export default function ProveedoresScreen() {
           <View style={{ flex: 1 }}>
             <FormField
               label="Persona de contacto"
-              placeholder="Nombre asesor"
+              placeholder="Asesor comercial"
               value={contactName}
               onChangeText={setContactName}
             />
@@ -321,19 +337,19 @@ export default function ProveedoresScreen() {
         </View>
         <FormField
           label="Especialidad de productos"
-          placeholder="Ej. Biblias Católicas, Camándulas de Olivo, Medallas"
+          placeholder="Ej. Biblias Católicas, Camándulas de Olivo"
           value={specialty}
           onChangeText={setSpecialty}
         />
         <FormField
-          label="Condiciones comerciales / Envío"
-          placeholder="Ej. Crédito 30 días, pedido mínimo 12 unidades"
+          label="Condiciones de pago / envío"
+          placeholder="Ej. Crédito 30 días, descuento por docena"
           value={paymentTerms}
           onChangeText={setPaymentTerms}
         />
         <FormField
-          label="Notas adicionales"
-          placeholder="Catálogo, cuenta bancaria, tiempos de entrega..."
+          label="Notas"
+          placeholder="Cuentas bancarias, catálogo, observaciones..."
           multiline
           value={notes}
           onChangeText={setNotes}
@@ -350,60 +366,56 @@ export default function ProveedoresScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
-  headerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-  },
-  headerBtnText: { color: COLORS.primary, fontSize: 12, fontWeight: '800' },
   searchWrap: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 },
-  searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  searchInput: { flex: 1, fontSize: 14, color: COLORS.text, paddingVertical: 0 },
-  listContent: { padding: 16, paddingTop: 10, paddingBottom: 32, gap: 12 },
+  listContent: { padding: 16, paddingTop: 10, paddingBottom: 34, gap: 12 },
   supCard: {
     backgroundColor: COLORS.surface,
-    borderRadius: 15,
+    borderRadius: 16,
     padding: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
     gap: 10,
     ...SHADOWS.card,
   },
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: 11 },
+  avatarMonogram: {
+    width: 44,
+    height: 44,
+    borderRadius: 13,
+    backgroundColor: COLORS.primary,
+    borderWidth: 1.5,
+    borderColor: COLORS.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    fontFamily: SERIF_FONT,
+    color: COLORS.ivory,
+    fontSize: 15,
+    fontWeight: '700',
+  },
   supName: { fontSize: 15.5, fontWeight: '800', color: COLORS.text },
-  specialtyText: { fontSize: 12.5, color: COLORS.primary, fontWeight: '600', marginTop: 2 },
+  specialtyText: { fontSize: 12, color: COLORS.accentDark, fontWeight: '700', marginTop: 2 },
   infoBlock: { gap: 3 },
   infoRow: { fontSize: 12.5, color: COLORS.textSecondary },
   notesRow: { fontSize: 12, color: COLORS.textMuted, fontStyle: 'italic', marginTop: 2 },
   statsStrip: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    backgroundColor: COLORS.background,
-    paddingHorizontal: 10,
+    backgroundColor: COLORS.surfaceWarm,
+    borderWidth: 1,
+    borderColor: COLORS.borderSubtle,
+    paddingHorizontal: 11,
     paddingVertical: 8,
-    borderRadius: 9,
+    borderRadius: 10,
   },
   statText: { fontSize: 12, fontWeight: '700', color: COLORS.textSecondary },
-  statStrong: { color: COLORS.text, fontWeight: '800' },
+  statStrong: { color: COLORS.primary, fontWeight: '800', fontVariant: ['tabular-nums'] },
   actionsBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 4,
+    paddingTop: 2,
   },
   contactBtns: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   iconBtn: {
@@ -411,7 +423,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: 9,
-    paddingVertical: 6,
+    paddingVertical: 6.5,
     borderRadius: 8,
   },
   iconBtnLabel: { fontSize: 11.5, fontWeight: '700', color: COLORS.text },

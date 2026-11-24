@@ -1,4 +1,5 @@
 import React from 'react';
+import { Platform } from 'react-native';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../constants/theme';
@@ -16,12 +17,12 @@ export default function TabsLayout() {
         tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: COLORS.textMuted,
         tabBarStyle: {
-          backgroundColor: COLORS.surface,
+          backgroundColor: COLORS.ivory,
           borderTopColor: COLORS.border,
           borderTopWidth: 1,
-          height: 62,
-          paddingBottom: 8,
-          paddingTop: 6,
+          height: Platform.OS === 'ios' ? 82 : 66,
+          paddingBottom: Platform.OS === 'ios' ? 22 : 9,
+          paddingTop: 7,
         },
         tabBarLabelStyle: {
           fontSize: 10.5,
@@ -33,8 +34,12 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: 'Inicio',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" size={size} color={String(color ?? COLORS.textMuted)} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? 'home' : 'home-outline'}
+              size={22}
+              color={String(color ?? COLORS.textMuted)}
+            />
           ),
         }}
       />
@@ -43,9 +48,18 @@ export default function TabsLayout() {
         options={{
           title: 'Stock',
           tabBarBadge: lowStockCount > 0 ? lowStockCount : undefined,
-          tabBarBadgeStyle: { backgroundColor: COLORS.danger, fontSize: 10 },
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="book-outline" size={size} color={String(color ?? COLORS.textMuted)} />
+          tabBarBadgeStyle: {
+            backgroundColor: COLORS.danger,
+            color: '#FFFFFF',
+            fontSize: 10,
+            fontWeight: '800',
+          },
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? 'book' : 'book-outline'}
+              size={22}
+              color={String(color ?? COLORS.textMuted)}
+            />
           ),
         }}
       />
@@ -54,9 +68,18 @@ export default function TabsLayout() {
         options={{
           title: 'Pagos',
           tabBarBadge: pendingPaymentsCount > 0 ? pendingPaymentsCount : undefined,
-          tabBarBadgeStyle: { backgroundColor: COLORS.warning, fontSize: 10 },
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="cash-outline" size={size} color={String(color ?? COLORS.textMuted)} />
+          tabBarBadgeStyle: {
+            backgroundColor: COLORS.accent,
+            color: COLORS.primaryDark,
+            fontSize: 10,
+            fontWeight: '800',
+          },
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? 'wallet' : 'wallet-outline'}
+              size={22}
+              color={String(color ?? COLORS.textMuted)}
+            />
           ),
         }}
       />
@@ -64,8 +87,12 @@ export default function TabsLayout() {
         name="inversiones"
         options={{
           title: 'Inversión',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="trending-up-outline" size={size} color={String(color ?? COLORS.textMuted)} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? 'trending-up' : 'trending-up-outline'}
+              size={22}
+              color={String(color ?? COLORS.textMuted)}
+            />
           ),
         }}
       />
@@ -73,8 +100,12 @@ export default function TabsLayout() {
         name="proveedores"
         options={{
           title: 'Proveed.',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="people-outline" size={size} color={String(color ?? COLORS.textMuted)} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? 'people' : 'people-outline'}
+              size={22}
+              color={String(color ?? COLORS.textMuted)}
+            />
           ),
         }}
       />
@@ -82,8 +113,12 @@ export default function TabsLayout() {
         name="datos"
         options={{
           title: 'Datos/Exp',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="stats-chart-outline" size={size} color={String(color ?? COLORS.textMuted)} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? 'bar-chart' : 'bar-chart-outline'}
+              size={22}
+              color={String(color ?? COLORS.textMuted)}
+            />
           ),
         }}
       />

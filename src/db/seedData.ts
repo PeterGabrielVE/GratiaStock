@@ -9,7 +9,7 @@ import {
 } from '../types/models';
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  storeName: 'GratiaStock',
+  storeName: 'Gratia',
   storeSubtitle: 'Librería y Artículos Católicos',
   currencySymbol: '$',
   defaultMinStock: 5,

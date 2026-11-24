@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useStore } from '../../context/StoreContext';
 import {
@@ -24,16 +25,21 @@ import {
   ChipSelector,
   EmptyState,
   FormField,
+  HeaderActionPill,
   KpiCard,
   PrimaryButton,
+  ProgressBar,
   ScreenHeader,
   confirmAction,
+  useToast,
 } from '../../components/UI';
 import { formatCurrency, formatDate, parseNumericInput } from '../../utils/format';
 
 type InvFilter = 'Todas' | 'Por Pagar' | InvestmentCategory;
 
 export default function InversionesScreen() {
+  const params = useLocalSearchParams<{ open?: string }>();
+  const { showToast } = useToast();
   const {
     settings,
     investments,
@@ -48,8 +54,8 @@ export default function InversionesScreen() {
   const sym = settings.currencySymbol;
   const [filter, setFilter] = useState<InvFilter>('Todas');
 
-  // Modal Nueva / Editar Inversión
   const [modalOpen, setModalOpen] = useState(false);
+  const [dismissedOpenParam, setDismissedOpenParam] = useState<string | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<InvestmentCategory>('Compra de Stock');
@@ -62,9 +68,16 @@ export default function InversionesScreen() {
   const [newUnitCostInput, setNewUnitCostInput] = useState('');
   const [notes, setNotes] = useState('');
 
-  // Modal Abonar a Proveedor
   const [payTarget, setPayTarget] = useState<Investment | null>(null);
   const [supplierAbono, setSupplierAbono] = useState('');
+
+  const isModalVisible =
+    modalOpen || Boolean(params.open && params.open !== dismissedOpenParam);
+
+  const closeInvModal = () => {
+    setModalOpen(false);
+    if (params.open) setDismissedOpenParam(params.open);
+  };
 
   const supplierMap = useMemo(
     () => new Map(suppliers.map((s) => [s.id, s.name])),
@@ -141,7 +154,7 @@ export default function InversionesScreen() {
     }
     const amount = Math.max(0, parseNumericInput(amountInput));
     if (amount <= 0) {
-      Alert.alert('Monto inválido', 'El monto total de la inversión debe ser mayor a cero.');
+      Alert.alert('Monto inválido', 'El monto total debe ser mayor a cero.');
       return;
     }
     const paidRaw =
@@ -164,7 +177,12 @@ export default function InversionesScreen() {
       date: new Date().toISOString(),
       notes,
     });
-    setModalOpen(false);
+    closeInvModal();
+    showToast(
+      !editingId && productId && qtyAdded > 0
+        ? `Inversión guardada (+${qtyAdded} uds. al stock)`
+        : 'Inversión registrada con éxito'
+    );
   };
 
   const handlePaySupplier = async () => {
@@ -172,6 +190,7 @@ export default function InversionesScreen() {
     const amt = parseNumericInput(supplierAbono);
     if (amt <= 0) return;
     await payInvestmentBalance(payTarget.id, amt);
+    showToast(`Pago de ${formatCurrency(amt, sym)} aplicado al proveedor`);
     setPayTarget(null);
     setSupplierAbono('');
   };
@@ -179,13 +198,15 @@ export default function InversionesScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScreenHeader
-        title="Inversiones y Compras"
-        subtitle="Control de capital, surtido de stock y pagos a editoriales"
+        title="Inversiones"
+        subtitle="Compras de lote, activos y cuentas con editoriales"
         rightAction={
-          <Pressable onPress={openNewModal} style={styles.headerBtn}>
-            <Ionicons name="add" size={18} color={COLORS.primary} />
-            <Text style={styles.headerBtnText}>Invertir</Text>
-          </Pressable>
+          <HeaderActionPill
+            label="Invertir"
+            icon="add"
+            variant="gold"
+            onPress={openNewModal}
+          />
         }
       />
 
@@ -197,16 +218,16 @@ export default function InversionesScreen() {
           <View style={{ gap: 12, marginBottom: 4 }}>
             <View style={styles.kpiRow}>
               <KpiCard
-                label="Total Invertido"
+                label="Capital Invertido"
                 value={formatCurrency(totalInvested, sym)}
-                hint={`Recuperado: ${recoveryPct}% en caja`}
-                icon="wallet-outline"
+                hint={`Retorno en caja: ${recoveryPct}%`}
+                icon="trending-up-outline"
                 tone="primary"
               />
               <KpiCard
-                label="Deuda a Proveedores"
+                label="Por Pagar a Prov."
                 value={formatCurrency(totalSupplierDebt, sym)}
-                hint={totalSupplierDebt > 0 ? 'Saldos por liquidar' : 'Al día con proveedores'}
+                hint={totalSupplierDebt > 0 ? 'Compras a crédito' : 'Sin deudas activas'}
                 icon="alert-circle-outline"
                 tone={totalSupplierDebt > 0 ? 'warning' : 'success'}
               />
@@ -222,25 +243,27 @@ export default function InversionesScreen() {
           <EmptyState
             icon="trending-up-outline"
             title="Sin inversiones registradas"
-            description="Registra compras de lotes de Biblias, rosarios, vitrinas o gastos de envío."
+            description="Registra compras de lotes de Biblias, rosarios, vitrinas o gastos operativos."
             actionLabel="Registrar Inversión"
             onAction={openNewModal}
           />
         }
         renderItem={({ item }) => {
           const debt = Math.max(0, item.amount - item.paidAmount);
+          const paidRatio = item.amount > 0 ? item.paidAmount / item.amount : 1;
+
           return (
             <View style={styles.invCard}>
               <View style={styles.cardTop}>
                 <View style={{ flex: 1 }}>
                   <View style={styles.badgeRow}>
-                    <Badge text={item.category} tone="info" />
+                    <Badge text={item.category} tone="primary" />
                     <Text style={styles.dateText}>{formatDate(item.date)}</Text>
                   </View>
                   <Text style={styles.invTitle}>{item.title}</Text>
                   {item.supplierId && supplierMap.get(item.supplierId) ? (
                     <Text style={styles.subMeta}>
-                      🏢 Proveedor: {supplierMap.get(item.supplierId)}
+                      🏢 {supplierMap.get(item.supplierId)}
                     </Text>
                   ) : null}
                   {item.productId && item.quantityAdded > 0 ? (
@@ -252,17 +275,21 @@ export default function InversionesScreen() {
                   {item.notes ? <Text style={styles.notesText}>{item.notes}</Text> : null}
                 </View>
 
-                <View style={{ alignItems: 'flex-end' }}>
+                <View style={{ alignItems: 'flex-end', gap: 4 }}>
                   <Text style={styles.amountText}>{formatCurrency(item.amount, sym)}</Text>
                   <Badge
-                    text={debt > 0.009 ? `Por pagar: ${formatCurrency(debt, sym)}` : 'Pagado'}
+                    text={debt > 0.009 ? `Resta ${formatCurrency(debt, sym)}` : 'Liquidado'}
                     tone={debt > 0.009 ? 'warning' : 'success'}
                   />
                 </View>
               </View>
 
+              {debt > 0.009 ? (
+                <ProgressBar progress={paidRatio} tone="accent" height={5} />
+              ) : null}
+
               <View style={styles.cardFooter}>
-                <Text style={styles.methodLabel}>Vía {item.paymentMethod}</Text>
+                <Text style={styles.methodLabel}>Pago vía {item.paymentMethod}</Text>
                 <View style={styles.actionsRow}>
                   {debt > 0.009 ? (
                     <Pressable
@@ -270,10 +297,10 @@ export default function InversionesScreen() {
                         setPayTarget(item);
                         setSupplierAbono(debt.toFixed(2));
                       }}
-                      style={[styles.smallBtn, { backgroundColor: COLORS.warningLight }]}
+                      style={[styles.smallBtn, { backgroundColor: COLORS.accentLight }]}
                     >
-                      <Ionicons name="cash-outline" size={14} color={COLORS.warning} />
-                      <Text style={[styles.smallBtnText, { color: COLORS.warning }]}>
+                      <Ionicons name="cash-outline" size={14} color={COLORS.accentDark} />
+                      <Text style={[styles.smallBtnText, { color: COLORS.accentDark }]}>
                         Abonar
                       </Text>
                     </Pressable>
@@ -289,8 +316,11 @@ export default function InversionesScreen() {
                     onPress={() =>
                       confirmAction(
                         'Eliminar inversión',
-                        `¿Eliminar "${item.title}" del registro financiero?`,
-                        () => deleteInvestment(item.id),
+                        `¿Eliminar "${item.title}" del historial?`,
+                        async () => {
+                          await deleteInvestment(item.id);
+                          showToast('Inversión eliminada', 'info');
+                        },
                         Alert
                       )
                     }
@@ -307,13 +337,14 @@ export default function InversionesScreen() {
 
       {/* Modal Crear / Editar Inversión */}
       <BottomSheetModal
-        visible={modalOpen}
-        title={editingId ? 'Editar Inversión' : 'Registrar Nueva Inversión'}
-        onClose={() => setModalOpen(false)}
+        visible={isModalVisible}
+        title={editingId ? 'Editar Inversión' : 'Nueva Inversión o Compra'}
+        subtitle="Registra capital invertido y suma mercancía al inventario"
+        onClose={closeInvModal}
       >
         <FormField
           label="Concepto de la inversión *"
-          placeholder="Ej. Pedido 25 Biblias Latinoamericanas / Vitrina nueva"
+          placeholder="Ej. Pedido 25 Biblias Latinoamericanas / Vitrina"
           value={title}
           onChangeText={setTitle}
         />
@@ -339,7 +370,7 @@ export default function InversionesScreen() {
           <View style={{ flex: 1 }}>
             <FormField
               label={`Pagado Hoy (${sym})`}
-              placeholder="Vacío = 100% pagado"
+              placeholder="Vacío = 100%"
               keyboardType="decimal-pad"
               value={paidAmountInput}
               onChangeText={setPaidAmountInput}
@@ -355,7 +386,7 @@ export default function InversionesScreen() {
         />
 
         <View style={{ height: 12 }} />
-        <Text style={styles.label}>Proveedor vinculado (opcional)</Text>
+        <Text style={styles.label}>Proveedor / Editorial (opcional)</Text>
         <View style={styles.chipsWrap}>
           <Pressable
             onPress={() => setSupplierId(null)}
@@ -381,7 +412,7 @@ export default function InversionesScreen() {
         {!editingId && category === 'Compra de Stock' ? (
           <View style={styles.restockPanel}>
             <Text style={styles.restockTitle}>
-              📦 ¿Sumar unidades automáticamente a un producto del catálogo?
+              📦 ¿Sumar unidades automáticamente a un artículo del catálogo?
             </Text>
             <View style={styles.chipsWrap}>
               <Pressable
@@ -433,8 +464,8 @@ export default function InversionesScreen() {
         ) : null}
 
         <FormField
-          label="Notas / Factura"
-          placeholder="Número de factura, guía de envío o detalles..."
+          label="Notas / Nº Factura"
+          placeholder="Factura, guía de envío o acuerdos..."
           multiline
           value={notes}
           onChangeText={setNotes}
@@ -450,7 +481,8 @@ export default function InversionesScreen() {
       {/* Modal Abono a Proveedor */}
       <BottomSheetModal
         visible={Boolean(payTarget)}
-        title={`Pagar a Proveedor · ${payTarget?.title ?? ''}`}
+        title="Liquidar Saldo a Proveedor"
+        subtitle={payTarget?.title ?? ''}
         onClose={() => setPayTarget(null)}
       >
         <FormField
@@ -460,7 +492,7 @@ export default function InversionesScreen() {
           onChangeText={setSupplierAbono}
         />
         <PrimaryButton
-          label="Registrar Pago al Proveedor"
+          label="Confirmar Pago"
           icon="checkmark-done-outline"
           variant="success"
           onPress={handlePaySupplier}
@@ -472,21 +504,11 @@ export default function InversionesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
-  headerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-  },
-  headerBtnText: { color: COLORS.primary, fontSize: 12, fontWeight: '800' },
-  listContent: { padding: 16, paddingBottom: 32, gap: 12 },
+  listContent: { padding: 16, paddingBottom: 34, gap: 12 },
   kpiRow: { flexDirection: 'row', gap: 10 },
   invCard: {
     backgroundColor: COLORS.surface,
-    borderRadius: 15,
+    borderRadius: 16,
     padding: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -505,14 +527,19 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   notesText: { fontSize: 12, color: COLORS.textMuted, marginTop: 3 },
-  amountText: { fontSize: 17, fontWeight: '900', color: COLORS.primary, marginBottom: 4 },
+  amountText: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: COLORS.primary,
+    fontVariant: ['tabular-nums'],
+  },
   cardFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: COLORS.border,
+    borderTopColor: COLORS.borderSubtle,
   },
   methodLabel: { fontSize: 11.5, color: COLORS.textMuted, fontWeight: '600' },
   actionsRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -525,7 +552,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   smallBtnText: { fontSize: 11.5, fontWeight: '700', color: COLORS.text },
-  label: { fontSize: 12, fontWeight: '700', color: COLORS.textSecondary, marginBottom: 5 },
+  label: { fontSize: 12, fontWeight: '700', color: COLORS.primary, marginBottom: 5 },
   row2: { flexDirection: 'row', gap: 10 },
   chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
   optChip: {
@@ -534,14 +561,16 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: COLORS.border,
-    backgroundColor: COLORS.background,
+    backgroundColor: COLORS.surfaceWarm,
   },
   optChipActive: { backgroundColor: COLORS.primaryLight, borderColor: COLORS.primary },
   optChipText: { fontSize: 12, color: COLORS.textSecondary, fontWeight: '600' },
   optChipTextActive: { color: COLORS.primary, fontWeight: '800' },
   restockPanel: {
-    backgroundColor: COLORS.surfaceAlt,
-    borderRadius: 12,
+    backgroundColor: COLORS.ivory,
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+    borderRadius: 13,
     padding: 12,
     marginBottom: 12,
   },

@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,132 +10,196 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useStore } from '../../context/StoreContext';
-import { COLORS, SHADOWS } from '../../constants/theme';
-import { Badge, KpiCard, ScreenHeader } from '../../components/UI';
+import { COLORS, SERIF_FONT, SHADOWS } from '../../constants/theme';
+import {
+  Badge,
+  BrandLoadingScreen,
+  GratiaLogoCard,
+  HeaderActionPill,
+  KpiCard,
+  ProgressBar,
+  ScreenHeader,
+} from '../../components/UI';
 import { formatCurrency, formatDate } from '../../utils/format';
 
 export default function DashboardScreen() {
   const { isLoading, settings, products, sales, investments, suppliers } = useStore();
 
   if (isLoading) {
-    return (
-      <SafeAreaView style={styles.loadingWrap}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
-        <Text style={styles.loadingText}>Cargando inventario católico...</Text>
-      </SafeAreaView>
-    );
+    return <BrandLoadingScreen />;
   }
 
   const sym = settings.currencySymbol;
   const totalUnits = products.reduce((sum, p) => sum + p.stock, 0);
   const stockSaleValue = products.reduce((sum, p) => sum + p.stock * p.salePrice, 0);
   const stockCostValue = products.reduce((sum, p) => sum + p.stock * p.costPrice, 0);
+  const potentialMargin = Math.max(0, stockSaleValue - stockCostValue);
   const lowStockProducts = products.filter((p) => p.stock <= p.minStock);
 
+  const totalBilled = sales.reduce((sum, s) => sum + s.total, 0);
   const totalCollected = sales.reduce((sum, s) => sum + s.paidAmount, 0);
   const totalReceivable = sales.reduce((sum, s) => sum + s.balance, 0);
+  const collectionRatio = totalBilled > 0 ? totalCollected / totalBilled : 1;
+
   const pendingSales = sales.filter((s) => s.status !== 'paid');
   const totalInvested = investments.reduce((sum, inv) => sum + inv.amount, 0);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScreenHeader
-        title={`✝ ${settings.storeName}`}
-        subtitle={`${settings.storeSubtitle} · ${suppliers.length} proveedores`}
+        title={settings.storeName}
+        subtitle={`${suppliers.length} proveedores · ${totalUnits} unidades en stock`}
         rightAction={
-          <Pressable
-            onPress={() => router.push('/(tabs)/datos')}
-            style={styles.exportHeaderBtn}
-          >
-            <Ionicons name="download-outline" size={16} color="#FFFFFF" />
-            <Text style={styles.exportHeaderText}>Exportar</Text>
-          </Pressable>
+          <HeaderActionPill
+            label="Exportar"
+            icon="download-outline"
+            variant="gold"
+            onPress={() =>
+              router.push({
+                pathname: '/(tabs)/datos',
+                params: { tab: `export_${sales.length}_${products.length}` },
+              })
+            }
+          />
         }
       />
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Acciones rápidas */}
-        <View style={styles.quickActionsCard}>
-          <Text style={styles.sectionSmallTitle}>ACCIONES RÁPIDAS</Text>
+        {/* Tarjeta Principal con Logo Oficial de Gratia */}
+        <GratiaLogoCard
+          storeName={settings.storeName}
+          subtitle={`${settings.storeSubtitle}${settings.parishOrAddress ? ` · ${settings.parishOrAddress}` : ''}`}
+          rightBadge={`${products.length} ítems`}
+        />
+
+        {/* Atajos Directos de 1 Toque */}
+        <View style={styles.quickCard}>
+          <View style={styles.quickHeaderRow}>
+            <Text style={styles.overlineText}>OPERACIONES RÁPIDAS</Text>
+            <Text style={styles.overlineHint}>Un toque para abrir</Text>
+          </View>
           <View style={styles.quickGrid}>
-            <Pressable
-              style={styles.quickItem}
-              onPress={() => router.push('/(tabs)/pagos')}
-            >
-              <View style={[styles.quickIcon, { backgroundColor: COLORS.primaryLight }]}>
-                <Ionicons name="cart-outline" size={20} color={COLORS.primary} />
-              </View>
-              <Text style={styles.quickLabel}>Venta / Abono</Text>
-            </Pressable>
-
-            <Pressable
-              style={styles.quickItem}
-              onPress={() => router.push('/(tabs)/stock')}
-            >
-              <View style={[styles.quickIcon, { backgroundColor: COLORS.accentLight }]}>
-                <Ionicons name="book-outline" size={20} color={COLORS.accent} />
-              </View>
-              <Text style={styles.quickLabel}>Biblias y Stock</Text>
-            </Pressable>
-
-            <Pressable
-              style={styles.quickItem}
-              onPress={() => router.push('/(tabs)/inversiones')}
-            >
-              <View style={[styles.quickIcon, { backgroundColor: COLORS.infoLight }]}>
-                <Ionicons name="wallet-outline" size={20} color={COLORS.info} />
-              </View>
-              <Text style={styles.quickLabel}>Inversiones</Text>
-            </Pressable>
-
-            <Pressable
-              style={styles.quickItem}
-              onPress={() => router.push('/(tabs)/datos')}
-            >
-              <View style={[styles.quickIcon, { backgroundColor: COLORS.successLight }]}>
-                <Ionicons name="share-social-outline" size={20} color={COLORS.success} />
-              </View>
-              <Text style={styles.quickLabel}>CSV / Backup</Text>
-            </Pressable>
+            <QuickTile
+              icon="bag-add-outline"
+              label="Nueva Venta"
+              tone="primary"
+              onPress={() =>
+                router.push({
+                  pathname: '/(tabs)/pagos',
+                  params: { open: `sale_${sales.length + 1}` },
+                })
+              }
+            />
+            <QuickTile
+              icon="add-circle-outline"
+              label="Nuevo Artículo"
+              tone="accent"
+              onPress={() =>
+                router.push({
+                  pathname: '/(tabs)/stock',
+                  params: { open: `prod_${products.length + 1}` },
+                })
+              }
+            />
+            <QuickTile
+              icon="Layers-outlineFallback"
+              customIcon="cube-outline"
+              label="Invertir Lote"
+              tone="info"
+              onPress={() =>
+                router.push({
+                  pathname: '/(tabs)/inversiones',
+                  params: { open: `inv_${investments.length + 1}` },
+                })
+              }
+            />
+            <QuickTile
+              icon="share-social-outline"
+              label="Excel / Backup"
+              tone="success"
+              onPress={() =>
+                router.push({
+                  pathname: '/(tabs)/datos',
+                  params: { tab: `export_${Date.length}` },
+                })
+              }
+            />
           </View>
         </View>
 
-        {/* KPIs principales */}
+        {/* Tarjeta de Salud de Cobranza */}
+        <Pressable
+          onPress={() => router.push('/(tabs)/pagos')}
+          style={styles.healthBanner}
+        >
+          <View style={styles.healthTopRow}>
+            <View>
+              <Text style={styles.healthLabel}>FLUJO DE VENTAS Y ABONOS</Text>
+              <Text style={styles.healthMainAmount}>
+                {formatCurrency(totalCollected, sym)}{' '}
+                <Text style={styles.healthSubInline}>
+                  cobrados de {formatCurrency(totalBilled, sym)}
+                </Text>
+              </Text>
+            </View>
+            <View style={styles.healthPctBadge}>
+              <Text style={styles.healthPctText}>{Math.round(collectionRatio * 100)}%</Text>
+            </View>
+          </View>
+          <ProgressBar progress={collectionRatio} tone="accent" height={8} />
+          <View style={styles.healthFooterRow}>
+            <Text style={styles.healthFootNote}>
+              {pendingSales.length > 0
+                ? `${pendingSales.length} cuentas con abonos pendientes (${formatCurrency(totalReceivable, sym)})`
+                : 'Todas las ventas están 100% liquidadas'}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={COLORS.accent} />
+          </View>
+        </Pressable>
+
+        {/* KPIs Principales */}
         <View style={styles.kpiGrid}>
           <KpiCard
-            label="Cobrado en Caja"
+            label="Caja Efectiva"
             value={formatCurrency(totalCollected, sym)}
-            hint={`${sales.length} ventas registradas`}
-            icon="cash-outline"
+            hint={`${sales.length} ventas acumuladas`}
+            icon="wallet-outline"
             tone="success"
+            onPress={() => router.push('/(tabs)/pagos')}
           />
           <KpiCard
-            label="Por Cobrar (Abonos)"
+            label="Por Cobrar"
             value={formatCurrency(totalReceivable, sym)}
-            hint={`${pendingSales.length} cuentas activas`}
+            hint={`${pendingSales.length} apartados activos`}
             icon="time-outline"
             tone={totalReceivable > 0 ? 'warning' : 'info'}
+            onPress={() => router.push('/(tabs)/pagos')}
           />
           <KpiCard
-            label="Valor Inventario"
+            label="Valor en Stock"
             value={formatCurrency(stockSaleValue, sym)}
-            hint={`Costo: ${formatCurrency(stockCostValue, sym)} · ${totalUnits} uds.`}
-            icon="cube-outline"
+            hint={`Ganancia pot.: ${formatCurrency(potentialMargin, sym)}`}
+            icon="book-outline"
             tone="primary"
+            onPress={() => router.push('/(tabs)/stock')}
           />
           <KpiCard
             label="Capital Invertido"
             value={formatCurrency(totalInvested, sym)}
-            hint={`${investments.length} compras/inversiones`}
+            hint={`Costo actual: ${formatCurrency(stockCostValue, sym)}`}
             icon="trending-up-outline"
             tone="accent"
+            onPress={() => router.push('/(tabs)/inversiones')}
           />
         </View>
 
-        {/* Alertas de Stock Bajo */}
+        {/* Alertas de Reposición */}
         <View style={styles.sectionBlock}>
           <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>Alertas de Reposición</Text>
+            <View style={styles.sectionTitleWrap}>
+              <Ionicons name="notifications-outline" size={18} color={COLORS.primary} />
+              <Text style={styles.sectionTitle}>Reposición de Stock</Text>
+            </View>
             <Pressable onPress={() => router.push('/(tabs)/stock')}>
               <Text style={styles.linkText}>Ver catálogo →</Text>
             </Pressable>
@@ -146,37 +209,53 @@ export default function DashboardScreen() {
             <View style={styles.okBanner}>
               <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
               <Text style={styles.okBannerText}>
-                Todo el inventario católico supera el stock mínimo configurado.
+                Excelente: todos los productos católicos superan su stock mínimo.
               </Text>
             </View>
           ) : (
-            lowStockProducts.slice(0, 5).map((item) => (
-              <Pressable
-                key={item.id}
-                onPress={() => router.push('/(tabs)/stock')}
-                style={styles.listCard}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.itemTitle}>{item.name}</Text>
-                  <Text style={styles.itemSub}>
-                    {item.category} · {item.sku} · Ubicación: {item.location || 'General'}
-                  </Text>
-                </View>
-                <Badge
-                  text={item.stock === 0 ? 'AGOTADO' : `${item.stock} / mín ${item.minStock}`}
-                  tone="danger"
-                />
-              </Pressable>
-            ))
+            lowStockProducts.slice(0, 5).map((item) => {
+              const ratio = item.minStock > 0 ? item.stock / (item.minStock * 2) : 0;
+              return (
+                <Pressable
+                  key={item.id}
+                  onPress={() => router.push('/(tabs)/stock')}
+                  style={styles.listCard}
+                >
+                  <View style={{ flex: 1, gap: 5 }}>
+                    <View style={styles.cardTitleLine}>
+                      <Text style={styles.itemTitle} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                      <Badge
+                        text={item.stock === 0 ? 'AGOTADO' : `${item.stock} / mín ${item.minStock}`}
+                        tone={item.stock === 0 ? 'danger' : 'warning'}
+                      />
+                    </View>
+                    <Text style={styles.itemSub}>
+                      {item.category} · {item.sku}
+                      {item.location ? ` · 📍 ${item.location}` : ''}
+                    </Text>
+                    <ProgressBar
+                      progress={ratio}
+                      tone={item.stock === 0 ? 'danger' : 'warning'}
+                      height={5}
+                    />
+                  </View>
+                </Pressable>
+              );
+            })
           )}
         </View>
 
-        {/* Pagos y Abonos Pendientes */}
+        {/* Cuentas por Cobrar / Apartados */}
         <View style={styles.sectionBlock}>
           <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>Pagos / Apartados por Cobrar</Text>
+            <View style={styles.sectionTitleWrap}>
+              <Ionicons name="calendar-outline" size={18} color={COLORS.primary} />
+              <Text style={styles.sectionTitle}>Abonos Pendientes</Text>
+            </View>
             <Pressable onPress={() => router.push('/(tabs)/pagos')}>
-              <Text style={styles.linkText}>Gestionar pagos →</Text>
+              <Text style={styles.linkText}>Cobrar abonos →</Text>
             </Pressable>
           </View>
 
@@ -184,32 +263,82 @@ export default function DashboardScreen() {
             <View style={styles.okBanner}>
               <Ionicons name="checkmark-done-circle" size={20} color={COLORS.success} />
               <Text style={styles.okBannerText}>
-                No hay saldos ni abonos pendientes de clientes.
+                Sin cuentas pendientes: todos los clientes están al día.
               </Text>
             </View>
           ) : (
-            pendingSales.slice(0, 5).map((sale) => (
-              <Pressable
-                key={sale.id}
-                onPress={() => router.push('/(tabs)/pagos')}
-                style={styles.listCard}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.itemTitle}>
-                    {sale.customerName} · <Text style={{ color: COLORS.primary }}>{sale.folio}</Text>
-                  </Text>
-                  <Text style={styles.itemSub}>
-                    Pagado: {formatCurrency(sale.paidAmount, sym)} de {formatCurrency(sale.total, sym)}
-                    {sale.dueDate ? ` · Vence ${formatDate(sale.dueDate)}` : ''}
-                  </Text>
-                </View>
-                <Badge text={`Debe ${formatCurrency(sale.balance, sym)}`} tone="warning" />
-              </Pressable>
-            ))
+            pendingSales.slice(0, 5).map((sale) => {
+              const pct = sale.total > 0 ? sale.paidAmount / sale.total : 0;
+              return (
+                <Pressable
+                  key={sale.id}
+                  onPress={() => router.push('/(tabs)/pagos')}
+                  style={styles.listCard}
+                >
+                  <View style={{ flex: 1, gap: 5 }}>
+                    <View style={styles.cardTitleLine}>
+                      <Text style={styles.itemTitle} numberOfLines={1}>
+                        {sale.customerName}{' '}
+                        <Text style={{ color: COLORS.accentDark, fontSize: 12 }}>
+                          · {sale.folio}
+                        </Text>
+                      </Text>
+                      <Badge text={`Resta ${formatCurrency(sale.balance, sym)}`} tone="accent" />
+                    </View>
+                    <Text style={styles.itemSub}>
+                      Abonado: {formatCurrency(sale.paidAmount, sym)} de{' '}
+                      {formatCurrency(sale.total, sym)}
+                      {sale.dueDate ? ` · Vence ${formatDate(sale.dueDate)}` : ''}
+                    </Text>
+                    <ProgressBar progress={pct} tone="success" height={5} />
+                  </View>
+                </Pressable>
+              );
+            })
           )}
         </View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function QuickTile({
+  icon,
+  customIcon,
+  label,
+  tone,
+  onPress,
+}: {
+  icon: string;
+  customIcon?: keyof typeof Ionicons.glyphMap;
+  label: string;
+  tone: 'primary' | 'accent' | 'info' | 'success';
+  onPress: () => void;
+}) {
+  const palette = {
+    primary: { bg: COLORS.primaryLight, fg: COLORS.primary },
+    accent: { bg: COLORS.accentLight, fg: COLORS.accentDark },
+    info: { bg: COLORS.infoLight, fg: COLORS.info },
+    success: { bg: COLORS.successLight, fg: COLORS.success },
+  }[tone];
+
+  const resolvedIcon = (customIcon ?? icon) as keyof typeof Ionicons.glyphMap;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.quickItem,
+        pressed && { opacity: 0.82, transform: [{ scale: 0.97 }] },
+      ]}
+    >
+      <View style={[styles.quickIcon, { backgroundColor: palette.bg }]}>
+        <Ionicons name={resolvedIcon} size={21} color={palette.fg} />
+      </View>
+      <Text style={styles.quickLabel} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -218,53 +347,35 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
   },
-  loadingWrap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.background,
-    gap: 12,
-  },
-  loadingText: {
-    fontSize: 14,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-  },
-  exportHeaderBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.28)',
-  },
-  exportHeaderText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
   scrollContent: {
     padding: 16,
-    paddingBottom: 32,
-    gap: 16,
+    paddingBottom: 34,
+    gap: 15,
   },
-  quickActionsCard: {
+  quickCard: {
     backgroundColor: COLORS.surface,
-    borderRadius: 16,
+    borderRadius: 18,
     padding: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
     ...SHADOWS.card,
   },
-  sectionSmallTitle: {
+  quickHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  overlineText: {
     fontSize: 11,
     fontWeight: '800',
-    color: COLORS.textMuted,
+    color: COLORS.primary,
     letterSpacing: 0.8,
-    marginBottom: 10,
+  },
+  overlineHint: {
+    fontSize: 11,
+    color: COLORS.textMuted,
+    fontWeight: '600',
   },
   quickGrid: {
     flexDirection: 'row',
@@ -274,23 +385,80 @@ const styles = StyleSheet.create({
   quickItem: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 8,
-    borderRadius: 12,
-    backgroundColor: COLORS.background,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    borderRadius: 13,
+    backgroundColor: COLORS.surfaceWarm,
+    borderWidth: 1,
+    borderColor: COLORS.borderSubtle,
   },
   quickIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 42,
+    height: 42,
+    borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 6,
+    marginBottom: 7,
   },
   quickLabel: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.text,
     textAlign: 'center',
+  },
+  healthBanner: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 18,
+    padding: 15,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+    ...SHADOWS.card,
+  },
+  healthTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  healthLabel: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: COLORS.accent,
+    letterSpacing: 0.8,
+  },
+  healthMainAmount: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: COLORS.ivory,
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+  },
+  healthSubInline: {
+    fontSize: 12.5,
+    fontWeight: '500',
+    color: '#C9D8D1',
+  },
+  healthPctBadge: {
+    backgroundColor: COLORS.accent,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  healthPctText: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: COLORS.primaryDark,
+  },
+  healthFooterRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  healthFootNote: {
+    fontSize: 12,
+    color: '#DAE6E0',
+    fontWeight: '600',
   },
   kpiGrid: {
     flexDirection: 'row',
@@ -298,31 +466,38 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   sectionBlock: {
-    gap: 8,
+    gap: 9,
   },
   sectionHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 2,
+  },
+  sectionTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: COLORS.text,
-  },
-  linkText: {
-    fontSize: 12,
+    fontFamily: SERIF_FONT,
+    fontSize: 16.5,
     fontWeight: '700',
     color: COLORS.primary,
+  },
+  linkText: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: COLORS.accentDark,
   },
   okBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 9,
     backgroundColor: COLORS.successLight,
-    padding: 12,
-    borderRadius: 12,
+    padding: 13,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#C5E5D6',
   },
   okBannerText: {
     flex: 1,
@@ -333,22 +508,27 @@ const styles = StyleSheet.create({
   listCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
     backgroundColor: COLORS.surface,
     padding: 13,
-    borderRadius: 13,
+    borderRadius: 15,
     borderWidth: 1,
     borderColor: COLORS.border,
     ...SHADOWS.card,
   },
+  cardTitleLine: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
   itemTitle: {
+    flex: 1,
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.text,
   },
   itemSub: {
     fontSize: 12,
     color: COLORS.textSecondary,
-    marginTop: 3,
   },
 });
